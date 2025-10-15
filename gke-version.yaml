@@ -2,7 +2,7 @@ name: gke-version
 cluster_name: test-tokyo-cluster
 env: dev
 controlplane:
-  version: 1.33.4-gke.1350000
+  version: 1.32.8-gke.1134000
 nodes:
-  version: 1.33.4-gke.1350000
+  version: 1.32.8-gke.1134000
 
