@@ -205,7 +205,7 @@ jobs:
             const fs = require('fs');
 
             // Read context file
-            const context = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
+            const analysisContext = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
 
             // Read release notes if available
             let releaseNotes = '';
@@ -220,7 +220,7 @@ jobs:
 
             const commentBody = `## 🔄 GKE Version Change Detected
 
-            ${context}
+            ${analysisContext}
 
             ---
 
