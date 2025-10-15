@@ -101,80 +101,6 @@ jobs:
           curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${NEW_K8S}.md" \
             -o release-notes/k8s-${NEW_K8S}.md || echo "Failed to fetch K8s $NEW_K8S"
 
-          # Download old version if different
-          if [ "$OLD_K8S" != "$NEW_K8S" ] && [ "$OLD_K8S" != "none" ]; then
-            echo "Fetching Kubernetes $OLD_K8S release notes..."
-            curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${OLD_K8S}.md" \
-              -o release-notes/k8s-${OLD_K8S}.md || echo "Failed to fetch K8s $OLD_K8S"
-          fi
-
-      - name: Create context file for Claude
-        run: |
-          cat > release-notes/analysis-context.md << 'EOF'
-          # GKE Version Upgrade Context
-
-          ## Version Changes
-          - **Old Controlplane Version**: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
-          - **New Controlplane Version**: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
-          - **Old Nodes Version**: ${{ needs.detect-version-change.outputs.old_nodes_version }}
-          - **New Nodes Version**: ${{ needs.detect-version-change.outputs.new_nodes_version }}
-
-          ## Project Information
-          - **Cluster Name**: test-tokyo-cluster
-          - **Environment**: dev
-          - **Location**: asia-northeast1
-          - **Platform**: Google Kubernetes Engine (GKE)
-
-          ## Analysis Request
-
-          上記のバージョン変更について、以下の観点で詳細な分析を実施してください：
-
-          ### 1. バージョン変更サマリー
-          - メジャー/マイナー/パッチレベルの変更を明確に
-          - アップグレードパスの妥当性
-
-          ### 2. 🚨 Breaking Changes（破壊的変更）
-          - API変更（削除、動作変更、デフォルト値変更）
-          - 互換性に影響する変更
-          - 必須の対応事項
-
-          ### 3. ⚠️ Deprecations（非推奨化）
-          - 非推奨となったAPI/機能
-          - 削除予定時期
-          - 代替手段
-
-          ### 4. 🔒 Security Updates（セキュリティ）
-          - CVE修正
-          - セキュリティパッチ
-          - 脆弱性対応
-
-          ### 5. ✨ New Features & Improvements
-          - 新機能
-          - パフォーマンス改善
-          - 安定性向上
-
-          ### 6. 🎯 Impact on This Project
-          このGKEクラスタへ���具体的な影響を分析してください：
-          - 影響度（Critical/High/Medium/Low）
-          - 必要なアクション
-          - テスト項目
-          - ロールバック計画の必要性
-
-          ### 7. 📋 Action Items
-          以下の形式でチェックリストを作成してください：
-          - [ ] 実施すべきアクション
-          - [ ] 検証項目
-          - [ ] ドキュメント更新
-
-          ### 8. 📚 References
-          関連するドキュメントへのリンク
-
-          ## Output Format
-
-          Markdown形式で、上記の構造に従って分析結果を出力してください。
-          技術的に正確で、actionableな情報を提供することを重視してください。
-          EOF
-
       - name: Upload release notes artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -211,57 +137,68 @@ jobs:
           cat > analysis-prompt.txt << 'PROMPT_EOF'
           あなたはKubernetesとGKEの専門家です。
 
-          このリポジトリで以下のGKEバージョン変更が行われようとしています：
-          - Old Version: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
-          - New Version: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
-
           release-notes/ ディレクトリには以下のファイルがあります：
           - analysis-context.md: バージョン変更のコンテキスト情報
           - k8s-*.md: Kubernetesの公式リリースノート
 
-          これらのファイルを読み込んで分析し、以下の構造でMarkdown形式の影響分析レポートを作成してください：
+          これらのファイルを読み込んで分析し、以下の構造でMarkdown形式の影響分析レポートを作成してください。
+
+          ---
 
           # GKE Version Upgrade Analysis
 
           ## 📊 Version Change Summary
-          - バージョン変更の概要
-          - Change Level（Major/Minor/Patch）を判定
 
-          ## 🚨 Breaking Changes
-          - 破壊的変更のリスト
-          - 対応が必要な項目
+          バージョン変更の概要を記載：
+          - 変更レベル: Major/Minor/Patch
+          - 変更範囲: Kubernetes 1.X → 1.Y
+          - アップグレードパス: 直接アップグレード可能 or 段階的アップグレード必要
 
-          ## ⚠️ Deprecations
-          - 非推奨化された機能
-          - 移行期限と代替手段
+          ---
+
+          ## 🚨 URGENT UPGRADE NOTES
+
+          **最優先事項**: リリースノートの "Urgent Upgrade Notes" セクションを確認し、以下を記載してください：
+
+          - 即座に対応が必要な変更
+          - クラスタの動作に影響する重大な変更
+          - データ損失や可用性に影響する問題
+
+          **記載形式**:
+          ```
+          ### [タイトル]
+          - **影響**: どのような影響があるか
+          - **対応**: 何をすべきか
+          - **期限**: いつまでに対応すべきか
+          ```
+
+          もし該当項目がない場合は "該当なし" と明記してください。
+
+          ---
 
           ## 🔒 Security Updates
-          - セキュリティ修正
-          - CVE情報
 
-          ## ✨ New Features & Improvements
-          - 新機能
-          - 改善点
+          セキュリティ関連の変更を記載：
 
-          ## 🎯 Impact on This Project
-          - このGKEクラスタへの影響度（Critical/High/Medium/Low）
-          - 必要なアクション
-          - テスト項目
+          ### CVE修正
 
-          ## 📋 Action Items
-          実行すべきアクションのチェックリスト：
-          - [ ] アクション1
-          - [ ] アクション2
+          - **CVE-YYYY-XXXXX**: 概要と影響
+          - 修正内容
+          - 推奨アクション
 
-          ## 🧪 Testing Checklist
-          検証項目のチェックリスト：
-          - [ ] テスト項目1
-          - [ ] テスト項目2
+          ### セキュリティ強化
 
-          ## 📚 References
-          - 関連ドキュメントへのリンク
+          - 追加されたセキュリティ機能
+          - デフォルト設定の変更
 
-          **重要**: リリースノートに基づいた事実のみを記載してください。推測は避けてください。
+          ---
+
+          **分析の重要なポイント**:
+          1. リリースノートの事実に基づいて記載してください
+          2. 推測は避け、不明な点は「要確認」と記載してください
+          3. Urgent Upgrade Notes は必ず確認し、存在する場合は詳細に記載してください
+          4. 非推奨APIは Pluto で検証可能な形式で記載してください
+          5. actionable な情報を提供することを最優先してください
           PROMPT_EOF
 
       - name: Run Claude analysis (headless mode)
