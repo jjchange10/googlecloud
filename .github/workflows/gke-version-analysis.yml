@@ -101,80 +101,6 @@ jobs:
           curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${NEW_K8S}.md" \
             -o release-notes/k8s-${NEW_K8S}.md || echo "Failed to fetch K8s $NEW_K8S"
 
-          # Download old version if different
-          if [ "$OLD_K8S" != "$NEW_K8S" ] && [ "$OLD_K8S" != "none" ]; then
-            echo "Fetching Kubernetes $OLD_K8S release notes..."
-            curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${OLD_K8S}.md" \
-              -o release-notes/k8s-${OLD_K8S}.md || echo "Failed to fetch K8s $OLD_K8S"
-          fi
-
-      - name: Create context file for Claude
-        run: |
-          cat > release-notes/analysis-context.md << 'EOF'
-          # GKE Version Upgrade Context
-
-          ## Version Changes
-          - **Old Controlplane Version**: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
-          - **New Controlplane Version**: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
-          - **Old Nodes Version**: ${{ needs.detect-version-change.outputs.old_nodes_version }}
-          - **New Nodes Version**: ${{ needs.detect-version-change.outputs.new_nodes_version }}
-
-          ## Project Information
-          - **Cluster Name**: test-tokyo-cluster
-          - **Environment**: dev
-          - **Location**: asia-northeast1
-          - **Platform**: Google Kubernetes Engine (GKE)
-
-          ## Analysis Request
-
-          上記のバージョン変更について、以下の観点で詳細な分析を実施してください：
-
-          ### 1. バージョン変更サマリー
-          - メジャー/マイナー/パッチレベルの変更を明確に
-          - アップグレードパスの妥当性
-
-          ### 2. 🚨 Breaking Changes（破壊的変更）
-          - API変更（削除、動作変更、デフォルト値変更）
-          - 互換性に影響する変更
-          - 必須の対応事項
-
-          ### 3. ⚠️ Deprecations（非推奨化）
-          - 非推奨となったAPI/機能
-          - 削除予定時期
-          - 代替手段
-
-          ### 4. 🔒 Security Updates（セキュリティ）
-          - CVE修正
-          - セキュリティパッチ
-          - 脆弱性対応
-
-          ### 5. ✨ New Features & Improvements
-          - 新機能
-          - パフォーマンス改善
-          - 安定性向上
-
-          ### 6. 🎯 Impact on This Project
-          このGKEクラスタへの具体的な影響を分析してください：
-          - 影響度（Critical/High/Medium/Low）
-          - 必要なアクション
-          - テスト項目
-          - ロールバック計画の必要性
-
-          ### 7. 📋 Action Items
-          以下の形式でチェックリストを作成してください：
-          - [ ] 実施すべきアクション
-          - [ ] 検証項目
-          - [ ] ドキュメント更新
-
-          ### 8. 📚 References
-          関連するドキュメントへのリンク
-
-          ## Output Format
-
-          Markdown形式で、上記の構造に従って分析結果を出力してください。
-          技術的に正確で、actionableな情報を提供することを重視してください。
-          EOF
-
       - name: Upload release notes artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -182,66 +108,170 @@ jobs:
           path: release-notes/
           retention-days: 30
 
-  # analyze-with-claude:
-  #   needs: [detect-version-change, fetch-release-notes]
-  #   if: needs.detect-version-change.outputs.has_changes == 'true'
-  #   runs-on: ubuntu-latest
+  analyze-with-claude:
+    needs: [detect-version-change, fetch-release-notes]
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  #     - name: Download release notes
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: release-notes
-  #         path: release-notes/
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
 
-  #     - name: Create PR comment with Claude mention
-  #       uses: actions/github-script@v7
-  #       with:
-  #         github-token: ${{ secrets.GITHUB_TOKEN }}
-  #         script: |
-  #           const fs = require('fs');
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-  #           // Read context file
-  #           const context = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
 
-  #           // Read release notes if available
-  #           let releaseNotes = '';
-  #           const files = fs.readdirSync('release-notes/');
-  #           for (const file of files) {
-  #             if (file.startsWith('k8s-')) {
-  #               const content = fs.readFileSync(`release-notes/${file}`, 'utf8');
-  #               // Limit to first 10000 characters to avoid too long comment
-  #               releaseNotes += `\n\n## ${file}\n${content.substring(0, 10000)}...\n`;
-  #             }
-  #           }
+      - name: Create analysis prompt
+        run: |
+          cat > analysis-prompt.txt << 'PROMPT_EOF'
+          あなたはKubernetesとGKEの専門家です。
 
-  #           const commentBody = `## 🔄 GKE Version Change Detected
+          release-notes/ ディレクトリには以下のファイルがあります：
+          - analysis-context.md: バージョン変更のコンテキスト情報
+          - k8s-*.md: Kubernetesの公式リリースノート
 
-  #           ${context}
+          これらのファイルを読み込んで分析し、以下の構造で影響分析レポートを回答してください。
 
-  #           ---
+          ---
 
-  #           @claude 上記のコンテキストとリリースノートを分析して、このGKEバージョンアップの詳細な影響分析レポートを作成してください。
+          # GKE Version Upgrade Analysis
 
-  #           <details>
-  #           <summary>📄 Kubernetes Release Notes (抜粋)</summary>
+          ## 📊 Version Change Summary
 
-  #           ${releaseNotes}
+          バージョン変更の概要を記載：
+          - 変更レベル: Major/Minor/Patch
+          - 変更範囲: Kubernetes 1.X → 1.Y
+          - アップグレードパス: 直接アップグレード可能 or 段階的アップグレード必要
 
-  #           </details>
+          ---
 
-  #           **分析を開始するには、Claude Code GitHub App がインストールされている必要があります。**
-  #           `;
+          ## 🚨 URGENT UPGRADE NOTES
 
-  #           await github.rest.issues.createComment({
-  #             owner: context.repo.owner,
-  #             repo: context.repo.repo,
-  #             issue_number: context.issue.number,
-  #             body: commentBody
-  #           });
+          **最優先事項**: リリースノートの "Urgent Upgrade Notes" セクションを確認し、以下を記載してください：
+
+          - 即座に対応が必要な変更
+          - クラスタの動作に影響する重大な変更
+          - データ損失や可用性に影響する問題
+
+          **記載形式**:
+          ```
+          ### [タイトル]
+          - **影響**: どのような影響があるか
+          - **対応**: 何をすべきか
+          - **期限**: いつまでに対応すべきか
+          ```
+
+          もし該当項目がない場合は "該当なし" と明記してください。
+
+          ---
+
+          ## 🔒 Security Updates
+
+          セキュリティ関連の変更を記載：
+
+          ### CVE修正
+
+          - **CVE-YYYY-XXXXX**: 概要と影響
+          - 修正内容
+          - 推奨アクション
+
+          ### セキュリティ強化
+
+          - 追加されたセキュリティ機能
+          - デフォルト設定の変更
+
+          ---
+
+          **分析の重要なポイント**:
+          1. リリースノートの事実に基づいて記載してください
+          2. 推測は避け、不明な点は「要確認」と記載してください
+          3. Urgent Upgrade Notes は必ず確認し、存在する場合は詳細に記載してください
+          4. 非推奨APIは Pluto で検証可能な形式で記載してください
+          5. actionable な情報を提供することを最優先してください
+          PROMPT_EOF
+
+      - name: Run Claude analysis (headless mode)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "Starting Claude Code analysis in headless mode..."
+          claude -p "$(cat analysis-prompt.txt)" > analysis-report.md || {
+            echo "# Analysis Failed" > analysis-report.md
+            echo "Claude Code analysis failed. Please check the logs." >> analysis-report.md
+            exit 1
+          }
+
+      - name: Post analysis to PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Create comment body
+          cat > comment-body.md << 'COMMENT_EOF'
+          ## 🔄 GKE Version Upgrade Analysis
+
+          **Version Change**: `${{ needs.detect-version-change.outputs.old_controlplane_version }}` → `${{ needs.detect-version-change.outputs.new_controlplane_version }}`
+
+          ---
+
+          COMMENT_EOF
+
+          # Append analysis
+          cat analysis-report.md >> comment-body.md
+
+          # Append footer
+          cat >> comment-body.md << COMMENT_EOF
+
+          ---
+
+          <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
+
+          # Find existing comment from github-actions bot
+          COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            | jq -r '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("🔄 GKE Version Upgrade Analysis"))) | .id' \
+            | head -1)
+
+          # Prepare JSON payload
+          jq -Rs '{"body": .}' comment-body.md > comment-payload.json
+
+          if [ -n "$COMMENT_ID" ]; then
+            # Update existing comment
+            echo "Updating existing comment: $COMMENT_ID"
+            curl -s -X PATCH \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${REPO}/issues/comments/${COMMENT_ID}" \
+              -d @comment-payload.json
+          else
+            # Create new comment
+            echo "Creating new comment"
+            curl -s -X POST \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -d @comment-payload.json
+          fi
+
+      - name: Upload analysis report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gke-analysis-report
+          path: analysis-report.md
+          retention-days: 30
 
   # validate-version:
   #   needs: detect-version-change
