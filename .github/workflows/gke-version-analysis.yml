@@ -182,66 +182,66 @@ jobs:
           path: release-notes/
           retention-days: 30
 
-  # analyze-with-claude:
-  #   needs: [detect-version-change, fetch-release-notes]
-  #   if: needs.detect-version-change.outputs.has_changes == 'true'
-  #   runs-on: ubuntu-latest
+  analyze-with-claude:
+    needs: [detect-version-change, fetch-release-notes]
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  #     - name: Download release notes
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: release-notes
-  #         path: release-notes/
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
 
-  #     - name: Create PR comment with Claude mention
-  #       uses: actions/github-script@v7
-  #       with:
-  #         github-token: ${{ secrets.GITHUB_TOKEN }}
-  #         script: |
-  #           const fs = require('fs');
+      - name: Create PR comment with Claude mention
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
 
-  #           // Read context file
-  #           const context = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
+            // Read context file
+            const context = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
 
-  #           // Read release notes if available
-  #           let releaseNotes = '';
-  #           const files = fs.readdirSync('release-notes/');
-  #           for (const file of files) {
-  #             if (file.startsWith('k8s-')) {
-  #               const content = fs.readFileSync(`release-notes/${file}`, 'utf8');
-  #               // Limit to first 10000 characters to avoid too long comment
-  #               releaseNotes += `\n\n## ${file}\n${content.substring(0, 10000)}...\n`;
-  #             }
-  #           }
+            // Read release notes if available
+            let releaseNotes = '';
+            const files = fs.readdirSync('release-notes/');
+            for (const file of files) {
+              if (file.startsWith('k8s-')) {
+                const content = fs.readFileSync(`release-notes/${file}`, 'utf8');
+                // Limit to first 10000 characters to avoid too long comment
+                releaseNotes += `\n\n## ${file}\n${content.substring(0, 10000)}...\n`;
+              }
+            }
 
-  #           const commentBody = `## 🔄 GKE Version Change Detected
+            const commentBody = `## 🔄 GKE Version Change Detected
 
-  #           ${context}
+            ${context}
 
-  #           ---
+            ---
 
-  #           @claude 上記のコンテキストとリリースノートを分析して、このGKEバージョンアップの詳細な影響分析レポートを作成してください。
+            @claude 上記のコンテキストとリリースノートを分析して、このGKEバージョンアップの詳細な影響分析レポートを作成してください。
 
-  #           <details>
-  #           <summary>📄 Kubernetes Release Notes (抜粋)</summary>
+            <details>
+            <summary>📄 Kubernetes Release Notes (抜粋)</summary>
 
-  #           ${releaseNotes}
+            ${releaseNotes}
 
-  #           </details>
+            </details>
 
-  #           **分析を開始するには、Claude Code GitHub App がインストールされている必要があります。**
-  #           `;
+            **分析を開始するには、Claude Code GitHub App がインストールされている必要があります。**
+            `;
 
-  #           await github.rest.issues.createComment({
-  #             owner: context.repo.owner,
-  #             repo: context.repo.repo,
-  #             issue_number: context.issue.number,
-  #             body: commentBody
-  #           });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
 
   # validate-version:
   #   needs: detect-version-change
