@@ -67,126 +67,120 @@ jobs:
           echo "Controlplane: $OLD_CP -> $NEW_CP"
           echo "Nodes: $OLD_NODES -> $NEW_NODES"
 
-  # fetch-release-notes:
-  #   needs: detect-version-change
-  #   if: needs.detect-version-change.outputs.has_changes == 'true'
-  #   runs-on: ubuntu-latest
+  fetch-release-notes:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  #     - name: Extract Kubernetes versions
-  #       id: k8s_versions
-  #       run: |
-  #         OLD_VERSION="${{ needs.detect-version-change.outputs.old_controlplane_version }}"
-  #         NEW_VERSION="${{ needs.detect-version-change.outputs.new_controlplane_version }}"
+      - name: Extract Kubernetes versions
+        id: k8s_versions
+        run: |
+          OLD_VERSION="${{ needs.detect-version-change.outputs.old_controlplane_version }}"
+          NEW_VERSION="${{ needs.detect-version-change.outputs.new_controlplane_version }}"
 
-  #         # Extract K8s version (e.g., 1.32.8-gke.1134000 -> 1.32)
-  #         OLD_K8S=$(echo $OLD_VERSION | cut -d. -f1,2)
-  #         NEW_K8S=$(echo $NEW_VERSION | cut -d. -f1,2)
+          # Extract K8s version (e.g., 1.32.8-gke.1134000 -> 1.32)
+          OLD_K8S=$(echo $OLD_VERSION | cut -d. -f1,2)
+          NEW_K8S=$(echo $NEW_VERSION | cut -d. -f1,2)
 
-  #         echo "old_k8s=$OLD_K8S" >> $GITHUB_OUTPUT
-  #         echo "new_k8s=$NEW_K8S" >> $GITHUB_OUTPUT
+          echo "old_k8s=$OLD_K8S" >> $GITHUB_OUTPUT
+          echo "new_k8s=$NEW_K8S" >> $GITHUB_OUTPUT
 
-  #     - name: Download Kubernetes Release Notes
-  #       run: |
-  #         OLD_K8S="${{ steps.k8s_versions.outputs.old_k8s }}"
-  #         NEW_K8S="${{ steps.k8s_versions.outputs.new_k8s }}"
+      - name: Download Kubernetes Release Notes
+        run: |
+          OLD_K8S="${{ steps.k8s_versions.outputs.old_k8s }}"
+          NEW_K8S="${{ steps.k8s_versions.outputs.new_k8s }}"
 
-  #         mkdir -p release-notes
+          mkdir -p release-notes
 
-  #         # Download new version release notes
-  #         echo "Fetching Kubernetes $NEW_K8S release notes..."
-  #         curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${NEW_K8S}.md" \
-  #           -o release-notes/k8s-${NEW_K8S}.md || echo "Failed to fetch K8s $NEW_K8S"
+          # Download new version release notes
+          echo "Fetching Kubernetes $NEW_K8S release notes..."
+          curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${NEW_K8S}.md" \
+            -o release-notes/k8s-${NEW_K8S}.md || echo "Failed to fetch K8s $NEW_K8S"
 
-  #         # Download old version if different
-  #         if [ "$OLD_K8S" != "$NEW_K8S" ] && [ "$OLD_K8S" != "none" ]; then
-  #           echo "Fetching Kubernetes $OLD_K8S release notes..."
-  #           curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${OLD_K8S}.md" \
-  #             -o release-notes/k8s-${OLD_K8S}.md || echo "Failed to fetch K8s $OLD_K8S"
-  #         fi
+          # Download old version if different
+          if [ "$OLD_K8S" != "$NEW_K8S" ] && [ "$OLD_K8S" != "none" ]; then
+            echo "Fetching Kubernetes $OLD_K8S release notes..."
+            curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${OLD_K8S}.md" \
+              -o release-notes/k8s-${OLD_K8S}.md || echo "Failed to fetch K8s $OLD_K8S"
+          fi
 
-  #     - name: Fetch GKE Release Notes
-  #       run: |
-  #         echo "Fetching GKE release notes..."
-  #         curl -sL "https://cloud.google.com/kubernetes-engine/docs/release-notes" \
-  #           -o release-notes/gke-release-notes.html || echo "Failed to fetch GKE release notes"
+      - name: Create context file for Claude
+        run: |
+          cat > release-notes/analysis-context.md << 'EOF'
+          # GKE Version Upgrade Context
 
-  #     - name: Create context file for Claude
-  #       run: |
-  #         cat > release-notes/analysis-context.md << 'EOF'
-  #         # GKE Version Upgrade Context
+          ## Version Changes
+          - **Old Controlplane Version**: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
+          - **New Controlplane Version**: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
+          - **Old Nodes Version**: ${{ needs.detect-version-change.outputs.old_nodes_version }}
+          - **New Nodes Version**: ${{ needs.detect-version-change.outputs.new_nodes_version }}
 
-  #         ## Version Changes
-  #         - **Old Controlplane Version**: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
-  #         - **New Controlplane Version**: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
-  #         - **Old Nodes Version**: ${{ needs.detect-version-change.outputs.old_nodes_version }}
-  #         - **New Nodes Version**: ${{ needs.detect-version-change.outputs.new_nodes_version }}
+          ## Project Information
+          - **Cluster Name**: test-tokyo-cluster
+          - **Environment**: dev
+          - **Location**: asia-northeast1
+          - **Platform**: Google Kubernetes Engine (GKE)
 
-  #         ## Project Information
-  #         - **Cluster Name**: test-tokyo-cluster
-  #         - **Environment**: dev
-  #         - **Location**: asia-northeast1
-  #         - **Platform**: Google Kubernetes Engine (GKE)
+          ## Analysis Request
 
-  #         ## Analysis Request
+          上記のバージョン変更について、以下の観点で詳細な分析を実施してください：
 
-  #         上記のバージョン変更について、以下の観点で詳細な分析を実施してください：
+          ### 1. バージョン変更サマリー
+          - メジャー/マイナー/パッチレベルの変更を明確に
+          - アップグレードパスの妥当性
 
-  #         ### 1. バージョン変更サマリー
-  #         - メジャー/マイナー/パッチレベルの変更を明確に
-  #         - アップグレードパスの妥当性
+          ### 2. 🚨 Breaking Changes（破壊的変更）
+          - API変更（削除、動作変更、デフォルト値変更）
+          - 互換性に影響する変更
+          - 必須の対応事項
 
-  #         ### 2. 🚨 Breaking Changes（破壊的変更）
-  #         - API変更（削除、動作変更、デフォルト値変更）
-  #         - 互換性に影響する変更
-  #         - 必須の対応事項
+          ### 3. ⚠️ Deprecations（非推奨化）
+          - 非推奨となったAPI/機能
+          - 削除予定時期
+          - 代替手段
 
-  #         ### 3. ⚠️ Deprecations（非推奨化）
-  #         - 非推奨となったAPI/機能
-  #         - 削除予定時期
-  #         - 代替手段
+          ### 4. 🔒 Security Updates（セキュリティ）
+          - CVE修正
+          - セキュリティパッチ
+          - 脆弱性対応
 
-  #         ### 4. 🔒 Security Updates（セキュリティ）
-  #         - CVE修正
-  #         - セキュリティパッチ
-  #         - 脆弱性対応
+          ### 5. ✨ New Features & Improvements
+          - 新機能
+          - パフォーマンス改善
+          - 安定性向上
 
-  #         ### 5. ✨ New Features & Improvements
-  #         - 新機能
-  #         - パフォーマンス改善
-  #         - 安定性向上
+          ### 6. 🎯 Impact on This Project
+          このGKEクラスタへの具体的な影響を分析してください：
+          - 影響度（Critical/High/Medium/Low）
+          - 必要なアクション
+          - テスト項目
+          - ロールバック計画の必要性
 
-  #         ### 6. 🎯 Impact on This Project
-  #         このGKEクラスタへの具体的な影響を分析してください：
-  #         - 影響度（Critical/High/Medium/Low）
-  #         - 必要なアクション
-  #         - テスト項目
-  #         - ロールバック計画の必要性
+          ### 7. 📋 Action Items
+          以下の形式でチェックリストを作成してください：
+          - [ ] 実施すべきアクション
+          - [ ] 検証項目
+          - [ ] ドキュメント更新
 
-  #         ### 7. 📋 Action Items
-  #         以下の形式でチェックリストを作成してください：
-  #         - [ ] 実施すべきアクション
-  #         - [ ] 検証項目
-  #         - [ ] ドキュメント更新
+          ### 8. 📚 References
+          関連するドキュメントへのリンク
 
-  #         ### 8. 📚 References
-  #         関連するドキュメントへのリンク
+          ## Output Format
 
-  #         ## Output Format
+          Markdown形式で、上記の構造に従って分析結果を出力してください。
+          技術的に正確で、actionableな情報を提供することを重視してください。
+          EOF
 
-  #         Markdown形式で、上記の構造に従って分析結果を出力してください。
-  #         技術的に正確で、actionableな情報を提供することを重視してください。
-  #         EOF
-
-  #     - name: Upload release notes artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: release-notes
-  #         path: release-notes/
-  #         retention-days: 30
+      - name: Upload release notes artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+          retention-days: 30
 
   # analyze-with-claude:
   #   needs: [detect-version-change, fetch-release-notes]
