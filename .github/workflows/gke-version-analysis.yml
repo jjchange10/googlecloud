@@ -1,0 +1,274 @@
+name: GKE Version Change Analysis
+
+on:
+  pull_request:
+    paths:
+      - 'gke-version.yaml'
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  detect-version-change:
+    runs-on: ubuntu-latest
+    outputs:
+      old_controlplane_version: ${{ steps.detect.outputs.old_controlplane_version }}
+      new_controlplane_version: ${{ steps.detect.outputs.new_controlplane_version }}
+      old_nodes_version: ${{ steps.detect.outputs.old_nodes_version }}
+      new_nodes_version: ${{ steps.detect.outputs.new_nodes_version }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version changes
+        id: detect
+        run: |
+          # Get the base branch
+          git fetch origin ${{ github.base_ref }}
+
+          # Extract versions from current branch
+          NEW_CP=$(grep -A 1 "controlplane:" gke-version.yaml | grep "version:" | awk '{print $2}')
+          NEW_NODES=$(grep -A 1 "nodes:" gke-version.yaml | grep "version:" | awk '{print $2}')
+
+          # Extract versions from base branch
+          git checkout origin/${{ github.base_ref }} -- gke-version.yaml 2>/dev/null || true
+
+          if [ -f gke-version.yaml ]; then
+            OLD_CP=$(grep -A 1 "controlplane:" gke-version.yaml | grep "version:" | awk '{print $2}')
+            OLD_NODES=$(grep -A 1 "nodes:" gke-version.yaml | grep "version:" | awk '{print $2}')
+          else
+            OLD_CP="none"
+            OLD_NODES="none"
+          fi
+
+          # Restore current branch version
+          git checkout HEAD -- gke-version.yaml
+
+          echo "old_controlplane_version=$OLD_CP" >> $GITHUB_OUTPUT
+          echo "new_controlplane_version=$NEW_CP" >> $GITHUB_OUTPUT
+          echo "old_nodes_version=$OLD_NODES" >> $GITHUB_OUTPUT
+          echo "new_nodes_version=$NEW_NODES" >> $GITHUB_OUTPUT
+
+          if [ "$OLD_CP" != "$NEW_CP" ] || [ "$OLD_NODES" != "$NEW_NODES" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Version changes detected:"
+          echo "Controlplane: $OLD_CP -> $NEW_CP"
+          echo "Nodes: $OLD_NODES -> $NEW_NODES"
+
+  fetch-release-notes:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Kubernetes versions
+        id: k8s_versions
+        run: |
+          OLD_VERSION="${{ needs.detect-version-change.outputs.old_controlplane_version }}"
+          NEW_VERSION="${{ needs.detect-version-change.outputs.new_controlplane_version }}"
+
+          # Extract K8s version (e.g., 1.32.8-gke.1134000 -> 1.32)
+          OLD_K8S=$(echo $OLD_VERSION | cut -d. -f1,2)
+          NEW_K8S=$(echo $NEW_VERSION | cut -d. -f1,2)
+
+          echo "old_k8s=$OLD_K8S" >> $GITHUB_OUTPUT
+          echo "new_k8s=$NEW_K8S" >> $GITHUB_OUTPUT
+
+      - name: Download Kubernetes Release Notes
+        run: |
+          OLD_K8S="${{ steps.k8s_versions.outputs.old_k8s }}"
+          NEW_K8S="${{ steps.k8s_versions.outputs.new_k8s }}"
+
+          mkdir -p release-notes
+
+          # Download new version release notes
+          echo "Fetching Kubernetes $NEW_K8S release notes..."
+          curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${NEW_K8S}.md" \
+            -o release-notes/k8s-${NEW_K8S}.md || echo "Failed to fetch K8s $NEW_K8S"
+
+          # Download old version if different
+          if [ "$OLD_K8S" != "$NEW_K8S" ] && [ "$OLD_K8S" != "none" ]; then
+            echo "Fetching Kubernetes $OLD_K8S release notes..."
+            curl -sL "https://raw.githubusercontent.com/kubernetes/kubernetes/master/CHANGELOG/CHANGELOG-${OLD_K8S}.md" \
+              -o release-notes/k8s-${OLD_K8S}.md || echo "Failed to fetch K8s $OLD_K8S"
+          fi
+
+      - name: Fetch GKE Release Notes
+        run: |
+          echo "Fetching GKE release notes..."
+          curl -sL "https://cloud.google.com/kubernetes-engine/docs/release-notes" \
+            -o release-notes/gke-release-notes.html || echo "Failed to fetch GKE release notes"
+
+      - name: Create context file for Claude
+        run: |
+          cat > release-notes/analysis-context.md << 'EOF'
+          # GKE Version Upgrade Context
+
+          ## Version Changes
+          - **Old Controlplane Version**: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
+          - **New Controlplane Version**: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
+          - **Old Nodes Version**: ${{ needs.detect-version-change.outputs.old_nodes_version }}
+          - **New Nodes Version**: ${{ needs.detect-version-change.outputs.new_nodes_version }}
+
+          ## Project Information
+          - **Cluster Name**: test-tokyo-cluster
+          - **Environment**: dev
+          - **Location**: asia-northeast1
+          - **Platform**: Google Kubernetes Engine (GKE)
+
+          ## Analysis Request
+
+          上記のバージョン変更について、以下の観点で詳細な分析を実施してください：
+
+          ### 1. バージョン変更サマリー
+          - メジャー/マイナー/パッチレベルの変更を明確に
+          - アップグレードパスの妥当性
+
+          ### 2. 🚨 Breaking Changes（破壊的変更）
+          - API変更（削除、動作変更、デフォルト値変更）
+          - 互換性に影響する変更
+          - 必須の対応事項
+
+          ### 3. ⚠️ Deprecations（非推奨化）
+          - 非推奨となったAPI/機能
+          - 削除予定時期
+          - 代替手段
+
+          ### 4. 🔒 Security Updates（セキュリティ）
+          - CVE修正
+          - セキュリティパッチ
+          - 脆弱性対応
+
+          ### 5. ✨ New Features & Improvements
+          - 新機能
+          - パフォーマンス改善
+          - 安定性向上
+
+          ### 6. 🎯 Impact on This Project
+          このGKEクラスタへの具体的な影響を分析してください：
+          - 影響度（Critical/High/Medium/Low）
+          - 必要なアクション
+          - テスト項目
+          - ロールバック計画の必要性
+
+          ### 7. 📋 Action Items
+          以下の形式でチェックリストを作成してください：
+          - [ ] 実施すべきアクション
+          - [ ] 検証項目
+          - [ ] ドキュメント更新
+
+          ### 8. 📚 References
+          関連するドキュメントへのリンク
+
+          ## Output Format
+
+          Markdown形式で、上記の構造に従って分析結果を出力してください。
+          技術的に正確で、actionableな情報を提供することを重視してください。
+          EOF
+
+      - name: Upload release notes artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+          retention-days: 30
+
+  analyze-with-claude:
+    needs: [detect-version-change, fetch-release-notes]
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+
+      - name: Create PR comment with Claude mention
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // Read context file
+            const context = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
+
+            // Read release notes if available
+            let releaseNotes = '';
+            const files = fs.readdirSync('release-notes/');
+            for (const file of files) {
+              if (file.startsWith('k8s-')) {
+                const content = fs.readFileSync(`release-notes/${file}`, 'utf8');
+                // Limit to first 10000 characters to avoid too long comment
+                releaseNotes += `\n\n## ${file}\n${content.substring(0, 10000)}...\n`;
+              }
+            }
+
+            const commentBody = `## 🔄 GKE Version Change Detected
+
+            ${context}
+
+            ---
+
+            @claude 上記のコンテキストとリリースノートを分析して、このGKEバージョンアップの詳細な影響分析レポートを作成してください。
+
+            <details>
+            <summary>📄 Kubernetes Release Notes (抜粋)</summary>
+
+            ${releaseNotes}
+
+            </details>
+
+            **分析を開始するには、Claude Code GitHub App がインストールされている必要があります。**
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+  validate-version:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Validate GKE version availability
+        run: |
+          chmod +x ./check-gke-version.sh
+
+          if ./check-gke-version.sh; then
+            echo "✅ All versions are valid and available in GKE"
+          else
+            echo "❌ Version validation failed"
+            echo "Please check the GKE release notes and update to a valid version"
+            exit 1
+          fi
