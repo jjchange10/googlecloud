@@ -141,7 +141,7 @@ jobs:
           - analysis-context.md: バージョン変更のコンテキスト情報
           - k8s-*.md: Kubernetesの公式リリースノート
 
-          これらのファイルを読み込んで分析し、以下の構造でMarkdown形式の影響分析レポートを作成してください。
+          これらのファイルを読み込んで分析し、以下の構造で影響分析レポートを回答してください。
 
           ---
 
@@ -213,33 +213,58 @@ jobs:
           }
 
       - name: Post analysis to PR
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Create comment body
+          cat > comment-body.md << 'COMMENT_EOF'
+          ## 🔄 GKE Version Upgrade Analysis
 
-            const analysis = fs.readFileSync('analysis-report.md', 'utf8');
+          **Version Change**: `${{ needs.detect-version-change.outputs.old_controlplane_version }}` → `${{ needs.detect-version-change.outputs.new_controlplane_version }}`
 
-            const commentBody = `## 🔄 GKE Version Upgrade Analysis
+          ---
 
-            **Version Change**: \`${{ needs.detect-version-change.outputs.old_controlplane_version }}\` → \`${{ needs.detect-version-change.outputs.new_controlplane_version }}\`
+          COMMENT_EOF
 
-            ---
+          # Append analysis
+          cat analysis-report.md >> comment-body.md
 
-            ${analysis}
+          # Append footer
+          cat >> comment-body.md << COMMENT_EOF
 
-            ---
+          ---
 
-            <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})</sub>
-            `;
+          <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: commentBody
-            });
+          # Find existing comment from github-actions bot
+          COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            | jq -r '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("🔄 GKE Version Upgrade Analysis"))) | .id' \
+            | head -1)
+
+          # Prepare JSON payload
+          jq -Rs '{"body": .}' comment-body.md > comment-payload.json
+
+          if [ -n "$COMMENT_ID" ]; then
+            # Update existing comment
+            echo "Updating existing comment: $COMMENT_ID"
+            curl -s -X PATCH \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${REPO}/issues/comments/${COMMENT_ID}" \
+              -d @comment-payload.json
+          else
+            # Create new comment
+            echo "Creating new comment"
+            curl -s -X POST \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -d @comment-payload.json
+          fi
 
       - name: Upload analysis report artifact
         uses: actions/upload-artifact@v4
