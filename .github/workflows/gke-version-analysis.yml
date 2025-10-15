@@ -108,6 +108,125 @@ jobs:
           path: release-notes/
           retention-days: 30
 
+  check-deprecated-apis:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract target Kubernetes version
+        id: target_version
+        run: |
+          NEW_VERSION="${{ needs.detect-version-change.outputs.new_controlplane_version }}"
+          # Extract K8s version (e.g., 1.32.8-gke.1134000 -> v1.32)
+          TARGET_K8S="v$(echo $NEW_VERSION | cut -d. -f1,2)"
+          echo "target_k8s=$TARGET_K8S" >> $GITHUB_OUTPUT
+          echo "Target Kubernetes version: $TARGET_K8S"
+
+      - name: Install Pluto
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/FairwindsOps/pluto/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+          curl -Lo pluto.tar.gz "https://github.com/FairwindsOps/pluto/releases/download/v${VERSION}/pluto_${VERSION}_linux_amd64.tar.gz"
+          tar xzf pluto.tar.gz
+          chmod +x pluto
+          sudo mv pluto /usr/local/bin/
+          rm pluto.tar.gz
+          echo "✅ Pluto version $(pluto version) installed"
+
+      - name: Scan for deprecated APIs
+        id: pluto_scan
+        run: |
+          echo "Scanning repository for deprecated Kubernetes APIs..."
+          echo ""
+
+          # Run Pluto and save output
+          pluto detect-files -d . --target-versions k8s=${{ steps.target_version.outputs.target_k8s }} -o wide > pluto-report.txt || true
+
+          # Display results
+          cat pluto-report.txt
+
+          # Check if deprecated APIs were found
+          if grep -q "API VERSIONS" pluto-report.txt; then
+            echo "deprecated_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "deprecated_found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pluto report artifact
+        run: |
+          cat > pluto-report.md << 'EOF'
+          # Deprecated API Detection Report
+
+          Target Kubernetes Version: `${{ steps.target_version.outputs.target_k8s }}`
+
+          ## Scan Results
+
+          ```
+          EOF
+          cat pluto-report.txt >> pluto-report.md
+          echo '```' >> pluto-report.md
+
+      - name: Upload Pluto report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluto-report
+          path: pluto-report.md
+          retention-days: 30
+
+      - name: Post Pluto report to PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          DEPRECATED_FOUND: ${{ steps.pluto_scan.outputs.deprecated_found }}
+        run: |
+          # Create comment body
+          if [ "$DEPRECATED_FOUND" = "true" ]; then
+            cat > pluto-comment.md << 'COMMENT_EOF'
+          ## ⚠️ Deprecated API Detection Report
+
+          **Target Version**: `${{ steps.target_version.outputs.target_k8s }}`
+
+          Pluto detected deprecated Kubernetes APIs in your manifests:
+
+          ```
+          COMMENT_EOF
+            cat pluto-report.txt >> pluto-comment.md
+            cat >> pluto-comment.md << 'COMMENT_EOF'
+          ```
+
+          **Action Required**: Please update the affected manifests before upgrading.
+
+          ---
+
+          <sub>🔍 Scanned by [Pluto](https://github.com/FairwindsOps/pluto) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
+          else
+            cat > pluto-comment.md << 'COMMENT_EOF'
+          ## ✅ Deprecated API Detection Report
+
+          **Target Version**: `${{ steps.target_version.outputs.target_k8s }}`
+
+          No deprecated Kubernetes APIs detected in your manifests.
+
+          ---
+
+          <sub>🔍 Scanned by [Pluto](https://github.com/FairwindsOps/pluto) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
+          fi
+
+      - name: Post Pluto comment
+        uses: ./.github/actions/post-pr-comment
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          comment-file: pluto-comment.md
+          identifier: 'Deprecated API Detection Report'
+
   analyze-with-claude:
     needs: [detect-version-change, fetch-release-notes]
     if: needs.detect-version-change.outputs.has_changes == 'true'
@@ -297,32 +416,13 @@ jobs:
           <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
           COMMENT_EOF
 
-          # Find existing comment from github-actions bot
-          COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            | jq -r '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("🔄 GKE Version Upgrade Analysis"))) | .id' \
-            | head -1)
-
-          # Prepare JSON payload
-          jq -Rs '{"body": .}' comment-body.md > comment-payload.json
-
-          if [ -n "$COMMENT_ID" ]; then
-            # Update existing comment
-            echo "Updating existing comment: $COMMENT_ID"
-            curl -s -X PATCH \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${REPO}/issues/comments/${COMMENT_ID}" \
-              -d @comment-payload.json
-          else
-            # Create new comment
-            echo "Creating new comment"
-            curl -s -X POST \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              -d @comment-payload.json
-          fi
+      - name: Post analysis comment
+        uses: ./.github/actions/post-pr-comment
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          comment-file: comment-body.md
+          identifier: '🔄 GKE Version Upgrade Analysis'
 
       - name: Upload analysis report artifact
         uses: actions/upload-artifact@v4
