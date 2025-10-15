@@ -154,7 +154,7 @@ jobs:
           - 安定性向上
 
           ### 6. 🎯 Impact on This Project
-          このGKEクラスタへの具体的な影響を分析してください：
+          このGKEクラスタへ���具体的な影響を分析してください：
           - 影響度（Critical/High/Medium/Low）
           - 必要なアクション
           - テスト項目
@@ -197,43 +197,104 @@ jobs:
           name: release-notes
           path: release-notes/
 
-      - name: Create PR comment with Claude mention
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Create analysis prompt
+        run: |
+          cat > analysis-prompt.txt << 'PROMPT_EOF'
+          あなたはKubernetesとGKEの専門家です。
+
+          このリポジトリで以下のGKEバージョン変更が行われようとしています：
+          - Old Version: ${{ needs.detect-version-change.outputs.old_controlplane_version }}
+          - New Version: ${{ needs.detect-version-change.outputs.new_controlplane_version }}
+
+          release-notes/ ディレクトリには以下のファイルがあります：
+          - analysis-context.md: バージョン変更のコンテキスト情報
+          - k8s-*.md: Kubernetesの公式リリースノート
+
+          これらのファイルを読み込んで分析し、以下の構造でMarkdown形式の影響分析レポートを作成してください：
+
+          # GKE Version Upgrade Analysis
+
+          ## 📊 Version Change Summary
+          - バージョン変更の概要
+          - Change Level（Major/Minor/Patch）を判定
+
+          ## 🚨 Breaking Changes
+          - 破壊的変更のリスト
+          - 対応が必要な項目
+
+          ## ⚠️ Deprecations
+          - 非推奨化された機能
+          - 移行期限と代替手段
+
+          ## 🔒 Security Updates
+          - セキュリティ修正
+          - CVE情報
+
+          ## ✨ New Features & Improvements
+          - 新機能
+          - 改善点
+
+          ## 🎯 Impact on This Project
+          - このGKEクラスタへの影響度（Critical/High/Medium/Low）
+          - 必要なアクション
+          - テスト項目
+
+          ## 📋 Action Items
+          実行すべきアクションのチェックリスト：
+          - [ ] アクション1
+          - [ ] アクション2
+
+          ## 🧪 Testing Checklist
+          検証項目のチェックリスト：
+          - [ ] テスト項目1
+          - [ ] テスト項目2
+
+          ## 📚 References
+          - 関連ドキュメントへのリンク
+
+          **重要**: リリースノートに基づいた事実のみを記載してください。推測は避けてください。
+          PROMPT_EOF
+
+      - name: Run Claude analysis (headless mode)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "Starting Claude Code analysis in headless mode..."
+          claude -p "$(cat analysis-prompt.txt)" > analysis-report.md || {
+            echo "# Analysis Failed" > analysis-report.md
+            echo "Claude Code analysis failed. Please check the logs." >> analysis-report.md
+            exit 1
+          }
+
+      - name: Post analysis to PR
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
 
-            // Read context file
-            const analysisContext = fs.readFileSync('release-notes/analysis-context.md', 'utf8');
+            const analysis = fs.readFileSync('analysis-report.md', 'utf8');
 
-            // Read release notes if available
-            let releaseNotes = '';
-            const files = fs.readdirSync('release-notes/');
-            for (const file of files) {
-              if (file.startsWith('k8s-')) {
-                const content = fs.readFileSync(`release-notes/${file}`, 'utf8');
-                // Limit to first 10000 characters to avoid too long comment
-                releaseNotes += `\n\n## ${file}\n${content.substring(0, 10000)}...\n`;
-              }
-            }
+            const commentBody = `## 🔄 GKE Version Upgrade Analysis
 
-            const commentBody = `## 🔄 GKE Version Change Detected
-
-            ${analysisContext}
+            **Version Change**: \`${{ needs.detect-version-change.outputs.old_controlplane_version }}\` → \`${{ needs.detect-version-change.outputs.new_controlplane_version }}\`
 
             ---
 
-            @claude 上記のコンテキストとリリースノートを分析して、このGKEバージョンアップの詳細な影響分析レポートを作成してください。
+            ${analysis}
 
-            <details>
-            <summary>📄 Kubernetes Release Notes (抜粋)</summary>
+            ---
 
-            ${releaseNotes}
-
-            </details>
-
-            **分析を開始するには、Claude Code GitHub App がインストールされている必要があります。**
+            <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})</sub>
             `;
 
             await github.rest.issues.createComment({
@@ -242,6 +303,13 @@ jobs:
               issue_number: context.issue.number,
               body: commentBody
             });
+
+      - name: Upload analysis report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gke-analysis-report
+          path: analysis-report.md
+          retention-days: 30
 
   # validate-version:
   #   needs: detect-version-change
