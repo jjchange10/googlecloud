@@ -265,9 +265,17 @@ jobs:
 
           これらのファイルとmanifestsを読み込んで分析し、以下の構造を守ってレポートを回答してください。
 
-          **重要**: 各セクションで情報を記載する際は、必ずその情報の参照元となるリリースノートのリンクを含めてください。
-          - Kubernetesのリリースノートの場合: `https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-X.YY.md#vXYYZ` の形式
-          - セクションへのリンク: 可能な限り具体的なセクション（例: `#urgent-upgrade-notes`, `#changelog-since-vXXX`）へのアンカーリンクを使用
+          **🚨 必須要件 - リリースノートへの参照リンク**:
+
+          すべての情報には必ず参照元のリリースノートリンクを含めてください。これは必須要件です。
+
+          リンク形式の例：
+          - バージョン全体: `[Kubernetes 1.33 CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md)`
+          - 特定のバージョン: `[v1.33.5](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#v1335)`
+          - セクション: `[Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#urgent-upgrade-notes)`
+          - 具体的なPR/Issue: `[#12345](https://github.com/kubernetes/kubernetes/pull/12345)`
+
+          各項目に「**参照**:」フィールドを必ず追加し、マークダウンリンクを記載してください。
 
           ---
 
@@ -280,7 +288,7 @@ jobs:
           - 変更範囲: Kubernetes 1.X → 1.Y
           - アップグレードパス: 直接アップグレード可能 or 段階的アップグレード必要
 
-          **参照**: [Kubernetes X.YY Release Notes](リリースノートのURL)
+          **参照**: [Kubernetes 1.XX CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md) および [v1.XX.X Release](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#v1XXX)
 
           ---
 
@@ -292,35 +300,47 @@ jobs:
           - クラスタの動作に影響する重大な変更
           - データ損失や可用性に影響する問題
 
-          **記載形式**:
-          ```
+          **記載形式**（必ず以下の形式に従ってください）:
+
           ### [タイトル]
           - **影響**: どのような影響があるか
           - **対応**: 何をすべきか
           - **期限**: いつまでに対応すべきか
-          - **参照**: [リリースノートへのリンク](URL)
-          ```
+          - **参照**: [Urgent Upgrade Notes - 具体的な項目名](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes)
 
-          もし該当項目がない場合は "該当なし" と明記してください。
+          もし該当項目がない場合は以下のように記載:
+          ```
+          該当なし
+
+          **参照**: [Kubernetes 1.XX Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes) - セクションを確認しましたが、該当項目はありませんでした。
+          ```
 
           ---
 
           ## 🔒 Security Updates
 
-          セキュリティ関連の変更を記載：
+          セキュリティ関連の変更を必ずリンク付きで記載：
 
           ### CVE修正
 
-          - **CVE-YYYY-XXXXX**: 概要と影響
-            - 修正内容
-            - 推奨アクション
-            - **参照**: [リリースノートへのリンク](URL)
+          各CVEについて以下の形式で記載：
+
+          #### CVE-YYYY-XXXXX: [タイトル]
+          - **概要**: CVEの説明
+          - **影響**: どのコンポーネント/バージョンに影響するか
+          - **修正内容**: 何が修正されたか
+          - **推奨アクション**: ユーザーがすべきこと
+          - **参照**: [CVE-YYYY-XXXXX](CVEへのリンク) | [Release Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#changelog-since-vXXX)
 
           ### セキュリティ強化
 
-          - 追加されたセキュリティ機能
-          - デフォルト設定の変更
-          - **参照**: [リリースノートへのリンク](URL)
+          各セキュリティ機能について：
+
+          #### [機能名]
+          - **内容**: 追加されたセキュリティ機能またはデフォルト設定の変更
+          - **影響**: 既存の設定への影響
+          - **推奨設定**: 推奨される設定
+          - **参照**: [該当セクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#セクション名)
 
           ---
 
@@ -405,6 +425,8 @@ jobs:
           5. 非推奨APIは具体的なファイル名とAPIバージョンを示してください
           6. actionable な情報を提供することを最優先してください
           7. **すべての情報に参照元のリリースノートリンクを含めてください**（最重要）
+          8. **リンクがない項目は不完全とみなされます。必ず各項目に参照リンクを追加してください**
+          9. **各セクションで情報を記載する際は、その情報がリリースノートのどこに記載されているか、具体的なURLを示してください**
           PROMPT_EOF
 
       - name: Run Claude analysis (headless mode)
