@@ -11,7 +11,7 @@ resource "google_container_cluster" "cluster" {
 
   name     = "${var.prefix}-cluster"
   location = var.region
-  min_master_version = "1.32.8-gke.1134000"
+  min_master_version = "1.33.5-gke.1080000"
 
   enable_shielded_nodes    = false
   remove_default_node_pool = true # 下記の自分たちで作成したnodeを利用するために、defaultのnode_poolを削除
@@ -136,7 +136,7 @@ resource "google_container_node_pool" "cluster_base_pool" {
     auto_upgrade = "false"
   }
 
-  version = "1.32.8-gke.1134000"
+  version = "1.33.5-gke.1080000"
 
   upgrade_settings {
     max_surge       = 2
