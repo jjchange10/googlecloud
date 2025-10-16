@@ -1,0 +1,58 @@
+name: 'Post or Update PR Comment'
+description: 'Posts a new comment or updates an existing comment on a PR'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  comment-file:
+    description: 'Path to file containing comment body'
+    required: true
+  identifier:
+    description: 'Unique identifier to find existing comment (text to search for in comment body)'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Post or update comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMENT_FILE: ${{ inputs.comment-file }}
+        IDENTIFIER: ${{ inputs.identifier }}
+      run: |
+        REPO="${{ github.repository }}"
+
+        # Find existing comment
+        COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          | jq -r ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$IDENTIFIER\"))) | .id" \
+          | head -1)
+
+        # Prepare JSON payload
+        jq -Rs '{"body": .}' "$COMMENT_FILE" > comment-payload.json
+
+        if [ -n "$COMMENT_ID" ]; then
+          # Update existing comment
+          echo "Updating existing comment: $COMMENT_ID"
+          curl -s -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${REPO}/issues/comments/${COMMENT_ID}" \
+            -d @comment-payload.json
+        else
+          # Create new comment
+          echo "Creating new comment"
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -d @comment-payload.json
+        fi
+
+        rm -f comment-payload.json

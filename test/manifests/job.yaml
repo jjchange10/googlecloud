@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sample-batch-job
+  namespace: default
+spec:
+  completions: 5
+  parallelism: 2
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: batch-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: worker
+        image: busybox:1.35
+        command: ["sh", "-c", "echo Processing task && sleep 30"]
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"

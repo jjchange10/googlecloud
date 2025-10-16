@@ -1,0 +1,191 @@
+あなたはKubernetesとGKEの専門家です。
+
+release-notes/ ディレクトリには以下のファイルがあります：
+- analysis-context.md: バージョン変更のコンテキスト情報
+- k8s-*.md: Kubernetesの公式リリースノート
+
+これらのファイルとmanifestsを読み込んで分析し、以下の構造を守ってレポートを回答してください。
+
+**🚨 必須要件 - リリースノートへの参照リンク**:
+
+すべての情報には必ず参照元のリリースノートリンクを含めてください。これは必須要件です。
+
+リンク形式の例：
+- バージョン全体: `[Kubernetes 1.33 CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md)`
+- 特定のバージョン: `[v1.33.5](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#v1335)`
+- セクション: `[Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#urgent-upgrade-notes)`
+- 具体的なPR/Issue: `[#12345](https://github.com/kubernetes/kubernetes/pull/12345)`
+
+各項目に「**参照**:」フィールドを必ず追加し、マークダウンリンクを記載してください。
+
+---
+
+# GKE Version Upgrade Analysis
+
+## 📊 Version Change Summary
+
+バージョン変更の概要を記載：
+- 変更レベル: Major/Minor/Patch
+- 変更範囲: Kubernetes 1.X → 1.Y
+- アップグレードパス: 直接アップグレード可能 or 段階的アップグレード必要
+
+**参照**: [Kubernetes 1.XX CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md) および [v1.XX.X Release](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#v1XXX)
+
+---
+
+## 🚨 URGENT UPGRADE NOTES
+
+**最優先事項**: リリースノートの "Urgent Upgrade Notes" セクションを確認し、以下を記載してください：
+
+- 即座に対応が必要な変更
+- クラスタの動作に影響する重大な変更
+- データ損失や可用性に影響する問題
+
+**記載形式**（必ず以下の形式に従ってください）:
+
+### [タイトル]
+- **影響**: どのような影響があるか
+- **対応**: 何をすべきか
+- **期限**: いつまでに対応すべきか
+- **参照**: [Urgent Upgrade Notes - 具体的な項目名](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes)
+
+もし該当項目がない場合は以下のように記載:
+```
+該当なし
+
+**参照**: [Kubernetes 1.XX Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes) - セクションを確認しましたが、該当項目はありませんでした。
+```
+
+---
+
+## 🔒 Security Updates
+
+セキュリティ関連の変更を必ずリンク付きで記載：
+
+### CVE修正
+
+各CVEについて以下の形式で記載：
+
+#### CVE-YYYY-XXXXX: [タイトル]
+- **概要**: CVEの説明
+- **影響**: どのコンポーネント/バージョンに影響するか
+- **修正内容**: 何が修正されたか
+- **推奨アクション**: ユーザーがすべきこと
+- **参照**: [CVE-YYYY-XXXXX](CVEへのリンク) | [Release Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#changelog-since-vXXX)
+
+### セキュリティ強化
+
+各セキュリティ機能について：
+
+#### [機能名]
+- **内容**: 追加されたセキュリティ機能またはデフォルト設定の変更
+- **影響**: 既存の設定への影響
+- **推奨設定**: 推奨される設定
+- **参照**: [該当セクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#セクション名)
+
+---
+
+## 💥 Breaking Changes
+
+破壊的変更を以下の形式で必ず記載：
+
+### [変更内容]
+
+- **変更点**: 何が変わったか
+- **影響範囲**: どのコンポーネントに影響するか
+- **移行方法**: どう対応すべきか
+- **影響度**: Critical/High/Medium/Low
+- **参照**: [該当する変更の詳細](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#セクション) または [PR #XXXXX](https://github.com/kubernetes/kubernetes/pull/XXXXX)
+
+該当項目がない場合:
+```
+該当なし
+
+**参照**: [Kubernetes 1.XX CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md) - 破壊的変更は確認されませんでした。
+```
+
+---
+
+## ✨ New Features & Improvements
+
+新機能と改善点を必ずリンク付きで記載：
+
+### 主要な新機能
+
+各新機能について以下の形式で記載：
+
+#### [機能名] (Status: Alpha/Beta/GA)
+- **説明**: 機能の概要
+- **活用方法**: どのように使うか
+- **メリット**: 導入することで得られる利点
+- **参照**: [該当する新機能のセクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#新機能セクション)
+
+### パフォーマンス改善
+
+各改善について：
+
+#### [改善項目]
+- **改善内容**: 何が改善されたか
+- **期待される効果**: パフォーマンス向上の度合い
+- **参照**: [該当セクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#セクション名)
+
+### 安定性向上
+
+各バグ修正や改善について：
+
+#### [修正項目]
+- **内容**: 修正されたバグや改善された動作
+- **影響**: どのような問題が解決されたか
+- **参照**: [該当セクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#bug-fixes)
+
+---
+
+## 📦 Manifest Impact Analysis
+
+**重要**: リポジトリ内のすべてのKubernetesマニフェストファイルを確認し、バージョンアップの影響を分析してください。
+
+### 影響を受けるマニフェスト
+
+**影響があるマニフェストのみ記載してください**。影響がない場合は「影響なし」とだけ記載してください。
+
+影響があるマニフェストについて：
+
+#### [マニフェストファイル名]
+
+- **使用しているAPIバージョン**: 例) apps/v1, batch/v1
+- **影響内容**: 非推奨API、動作変更、Breaking Changeなど
+- **必要なアクション**: 修正が必要な場合は具体的に記載
+- **優先度**: Critical/High/Medium/Low
+- **参照**: [関連するリリースノートのセクションへのリンク](URL)
+
+### 新機能で改善できる可能性
+
+新機能を活用してパフォーマンスやセキュリティを改善できるマニフェストがあれば記載：
+
+#### [マニフェストファイル名]
+- **適用できる新機能**: 具体的な新機能名
+- **期待される効果**: パフォーマンス向上、セキュリティ強化など
+- **実装例**: 簡単な設定例
+- **参照**: [新機能のドキュメント](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#該当セクション)
+
+---
+
+## 📚 References
+
+このセクションに、分析で参照したすべてのリリースノートのリンクをまとめて記載してください：
+
+- [Kubernetes X.YY.Z Release Notes](URL)
+- [Kubernetes X.YY CHANGELOG](URL)
+- その他参照したドキュメント
+
+---
+
+**分析の重要なポイント**:
+1. リリースノートの事実に基づいて記載してください
+2. 推測は避け、不明な点は「要確認」と記載してください
+3. Urgent Upgrade Notes は必ず確認し、存在する場合は詳細に記載してください
+4. リポジトリ内のすべてのマニフェストファイルを確認し、具体的な影響���分析してください
+5. 非推奨APIは具体的なファイル名とAPIバージョンを示してください
+6. actionable な情報を提供することを最優先してください
+7. **すべての情報に参照元のリリースノートリンクを含めてください**（最重要）
+8. **リンクがない項目は不完全とみなされます。必ず各項目に参照リンクを追加してください**

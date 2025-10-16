@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sample-db
+  namespace: default
+spec:
+  serviceName: sample-db
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sample-db
+  template:
+    metadata:
+      labels:
+        app: sample-db
+    spec:
+      containers:
+      - name: db
+        image: postgres:14
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: password
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard-rwo
+      resources:
+        requests:
+          storage: 10Gi
