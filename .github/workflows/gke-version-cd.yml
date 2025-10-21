@@ -1,0 +1,88 @@
+name: GKE Version Update CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'version/dev/gke-version.yaml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  upgrade-gke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Parse GKE version config
+        id: parse-config
+        run: |
+          # yamlÕ¡¤ëK‰$’­Ö‹
+          CLUSTER_NAME=$(yq eval '.cluster_name' version/dev/gke-version.yaml)
+          ENV=$(yq eval '.env' version/dev/gke-version.yaml)
+          CONTROL_PLANE_VERSION=$(yq eval '.controlplane.version' version/dev/gke-version.yaml)
+          NODE_VERSION=$(yq eval '.nodes.version' version/dev/gke-version.yaml)
+
+          echo "cluster_name=${CLUSTER_NAME}" >> $GITHUB_OUTPUT
+          echo "env=${ENV}" >> $GITHUB_OUTPUT
+          echo "control_plane_version=${CONTROL_PLANE_VERSION}" >> $GITHUB_OUTPUT
+          echo "node_version=${NODE_VERSION}" >> $GITHUB_OUTPUT
+
+          echo "Cluster: ${CLUSTER_NAME}"
+          echo "Environment: ${ENV}"
+          echo "Control Plane Version: ${CONTROL_PLANE_VERSION}"
+          echo "Node Version: ${NODE_VERSION}"
+
+      - name: Upgrade GKE Control Plane
+        run: |
+          gcloud container clusters upgrade ${{ steps.parse-config.outputs.cluster_name }} \
+            --master \
+            --cluster-version=${{ steps.parse-config.outputs.control_plane_version }} \
+            --region=${{ secrets.GCP_REGION }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --quiet
+
+      - name: Wait for Control Plane Upgrade
+        run: |
+          echo "Waiting for control plane upgrade to complete..."
+          sleep 60
+
+      - name: Upgrade GKE Node Pools
+        run: |
+          # YyfnÎüÉ×üë’Ö—Wf¢Ã×°ìüÉ
+          NODE_POOLS=$(gcloud container node-pools list \
+            --cluster=${{ steps.parse-config.outputs.cluster_name }} \
+            --region=${{ secrets.GCP_REGION }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --format="value(name)")
+
+          for POOL in $NODE_POOLS; do
+            echo "Upgrading node pool: $POOL"
+            gcloud container clusters upgrade ${{ steps.parse-config.outputs.cluster_name }} \
+              --node-pool=$POOL \
+              --cluster-version=${{ steps.parse-config.outputs.node_version }} \
+              --region=${{ secrets.GCP_REGION }} \
+              --project=${{ secrets.GCP_PROJECT_ID }} \
+              --quiet
+          done
+
+      - name: Verify Upgrade
+        run: |
+          gcloud container clusters describe ${{ steps.parse-config.outputs.cluster_name }} \
+            --region=${{ secrets.GCP_REGION }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --format="yaml(currentMasterVersion,currentNodeVersion)"

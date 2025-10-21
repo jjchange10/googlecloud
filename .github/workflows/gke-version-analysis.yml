@@ -28,22 +28,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup yq
+        uses: mikefarah/yq@master
+
       - name: Detect version changes
         id: detect
         run: |
           # Get the base branch
           git fetch origin ${{ github.base_ref }}
 
-          # Extract versions from current branch
-          NEW_CP=$(grep -A 1 "controlplane:" gke-version.yaml | grep "version:" | awk '{print $2}')
-          NEW_NODES=$(grep -A 1 "nodes:" gke-version.yaml | grep "version:" | awk '{print $2}')
+          # Extract versions from current branch using yq
+          NEW_CP=$(yq eval '.controlplane.version' gke-version.yaml)
+          NEW_NODES=$(yq eval '.nodes.version' gke-version.yaml)
 
           # Extract versions from base branch
           git checkout origin/${{ github.base_ref }} -- gke-version.yaml 2>/dev/null || true
 
           if [ -f gke-version.yaml ]; then
-            OLD_CP=$(grep -A 1 "controlplane:" gke-version.yaml | grep "version:" | awk '{print $2}')
-            OLD_NODES=$(grep -A 1 "nodes:" gke-version.yaml | grep "version:" | awk '{print $2}')
+            OLD_CP=$(yq eval '.controlplane.version' gke-version.yaml)
+            OLD_NODES=$(yq eval '.nodes.version' gke-version.yaml)
           else
             OLD_CP="none"
             OLD_NODES="none"
@@ -108,6 +111,125 @@ jobs:
           path: release-notes/
           retention-days: 30
 
+  check-deprecated-apis:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract target Kubernetes version
+        id: target_version
+        run: |
+          NEW_VERSION="${{ needs.detect-version-change.outputs.new_controlplane_version }}"
+          # Extract K8s version (e.g., 1.32.8-gke.1134000 -> v1.32)
+          TARGET_K8S="v$(echo $NEW_VERSION | cut -d. -f1,2)"
+          echo "target_k8s=$TARGET_K8S" >> $GITHUB_OUTPUT
+          echo "Target Kubernetes version: $TARGET_K8S"
+
+      - name: Install Pluto
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/FairwindsOps/pluto/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+          curl -Lo pluto.tar.gz "https://github.com/FairwindsOps/pluto/releases/download/v${VERSION}/pluto_${VERSION}_linux_amd64.tar.gz"
+          tar xzf pluto.tar.gz
+          chmod +x pluto
+          sudo mv pluto /usr/local/bin/
+          rm pluto.tar.gz
+          echo "✅ Pluto version $(pluto version) installed"
+
+      - name: Scan for deprecated APIs
+        id: pluto_scan
+        run: |
+          echo "Scanning repository for deprecated Kubernetes APIs..."
+          echo ""
+
+          # Run Pluto and save output
+          pluto detect-files -d . --target-versions k8s=${{ steps.target_version.outputs.target_k8s }} -o wide > pluto-report.txt || true
+
+          # Display results
+          cat pluto-report.txt
+
+          # Check if deprecated APIs were found
+          if grep -q "API VERSIONS" pluto-report.txt; then
+            echo "deprecated_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "deprecated_found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pluto report artifact
+        run: |
+          cat > pluto-report.md << 'EOF'
+          # Deprecated API Detection Report
+
+          Target Kubernetes Version: `${{ steps.target_version.outputs.target_k8s }}`
+
+          ## Scan Results
+
+          ```
+          EOF
+          cat pluto-report.txt >> pluto-report.md
+          echo '```' >> pluto-report.md
+
+      - name: Upload Pluto report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluto-report
+          path: pluto-report.md
+          retention-days: 30
+
+      - name: Post Pluto report to PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          DEPRECATED_FOUND: ${{ steps.pluto_scan.outputs.deprecated_found }}
+        run: |
+          # Create comment body
+          if [ "$DEPRECATED_FOUND" = "true" ]; then
+            cat > pluto-comment.md << 'COMMENT_EOF'
+          ## ⚠️ Deprecated API Detection Report
+
+          **Target Version**: `${{ steps.target_version.outputs.target_k8s }}`
+
+          Pluto detected deprecated Kubernetes APIs in your manifests:
+
+          ```
+          COMMENT_EOF
+            cat pluto-report.txt >> pluto-comment.md
+            cat >> pluto-comment.md << 'COMMENT_EOF'
+          ```
+
+          **Action Required**: Please update the affected manifests before upgrading.
+
+          ---
+
+          <sub>🔍 Scanned by [Pluto](https://github.com/FairwindsOps/pluto) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
+          else
+            cat > pluto-comment.md << 'COMMENT_EOF'
+          ## ✅ Deprecated API Detection Report
+
+          **Target Version**: `${{ steps.target_version.outputs.target_k8s }}`
+
+          No deprecated Kubernetes APIs detected in your manifests.
+
+          ---
+
+          <sub>🔍 Scanned by [Pluto](https://github.com/FairwindsOps/pluto) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
+          COMMENT_EOF
+          fi
+
+      - name: Post Pluto comment
+        uses: ./.github/actions/post-pr-comment
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          comment-file: pluto-comment.md
+          identifier: 'Deprecated API Detection Report'
+
   analyze-with-claude:
     needs: [detect-version-change, fetch-release-notes]
     if: needs.detect-version-change.outputs.has_changes == 'true'
@@ -141,7 +263,20 @@ jobs:
           - analysis-context.md: バージョン変更のコンテキスト情報
           - k8s-*.md: Kubernetesの公式リリースノート
 
-          これらのファイルを読み込んで分析し、以下の構造で影響分析レポートを回答してください。
+          これらのファイルとmanifestsを読み込んで分析し、ファイルにはまとめず、
+          以下の構造を守ってレポートを回答してください。
+
+          **🚨 必須要件 - リリースノートへの参照リンク**:
+
+          すべての情報には必ず参照元のリリースノートリンクを含めてください。これは必須要件です。
+
+          リンク形式の例：
+          - バージョン全体: `[Kubernetes 1.33 CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md)`
+          - 特定のバージョン: `[v1.33.5](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#v1335)`
+          - セクション: `[Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md#urgent-upgrade-notes)`
+          - 具体的なPR/Issue: `[#12345](https://github.com/kubernetes/kubernetes/pull/12345)`
+
+          各項目に「**参照**:」フィールドを必ず追加し、マークダウンリンクを回答してください。
 
           ---
 
@@ -149,56 +284,150 @@ jobs:
 
           ## 📊 Version Change Summary
 
-          バージョン変更の概要を記載：
+          バージョン変更の概要を回答：
           - 変更レベル: Major/Minor/Patch
           - 変更範囲: Kubernetes 1.X → 1.Y
           - アップグレードパス: 直接アップグレード可能 or 段階的アップグレード必要
+
+          **参照**: [Kubernetes 1.XX CHANGELOG](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md) および [v1.XX.X Release](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#v1XXX)
 
           ---
 
           ## 🚨 URGENT UPGRADE NOTES
 
-          **最優先事項**: リリースノートの "Urgent Upgrade Notes" セクションを確認し、以下を記載してください：
+          **最優先事項**: リリースノートの "Urgent Upgrade Notes" セクションを確認し、以下を回答してください：
 
           - 即座に対応が必要な変更
           - クラスタの動作に影響する重大な変更
           - データ損失や可用性に影響する問題
 
-          **記載形式**:
-          ```
+          **回答形式**（必ず以下の形式に従ってください）:
+
           ### [タイトル]
           - **影響**: どのような影響があるか
           - **対応**: 何をすべきか
           - **期限**: いつまでに対応すべきか
-          ```
+          - **参照**: [Urgent Upgrade Notes - 具体的な項目名](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes)
 
-          もし該当項目がない場合は "該当なし" と明記してください。
+          もし該当項目がない場合は以下のように回答:
+          ```
+          該当なし
+
+          **参照**: [Kubernetes 1.XX Urgent Upgrade Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#urgent-upgrade-notes) - セクションを確認しましたが、該当項目はありませんでした。
+          ```
 
           ---
 
           ## 🔒 Security Updates
 
-          セキュリティ関連の変更を記載：
+          セキュリティ関連の変更を必ずリンク付きで回答：
 
           ### CVE修正
 
-          - **CVE-YYYY-XXXXX**: 概要と影響
-          - 修正内容
-          - 推奨アクション
+          各CVEについて以下の形式で回答：
+
+          #### CVE-YYYY-XXXXX: [タイトル]
+          - **概要**: CVEの説明
+          - **影響**: どのコンポーネント/バージョンに影響するか
+          - **修正内容**: 何が修正されたか
+          - **推奨アクション**: ユーザーがすべきこと
+          - **参照**: [CVE-YYYY-XXXXX](CVEへのリンク) | [Release Notes](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#changelog-since-vXXX)
 
           ### セキュリティ強化
 
-          - 追加されたセキュリティ機能
-          - デフォルト設定の変更
+          各セキュリティ機能について：
+
+          #### [機能名]
+          - **内容**: 追加されたセキュリティ機能またはデフォルト設定の変更
+          - **影響**: 既存の設定への影響
+          - **推奨設定**: 推奨される設定
+          - **参照**: [該当セクション](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.XX.md#セクション名)
+
+          ---
+
+          ## 💥 Breaking Changes
+
+          破壊的変更を以下の形式で回答：
+
+          ### [変更内容]
+
+          - **変更点**: 何が変わったか
+          - **影響範囲**: どのコンポーネントに影響するか
+          - **移行方法**: どう対応すべき��
+          - **影響度**: Critical/High/Medium/Low
+          - **参照**: [リリースノートへのリンク](URL)
+
+          ---
+
+          ## ✨ New Features & Improvements
+
+          新機能と改善点：
+
+          ### 主要な新機能
+
+          - **機能名**: 説明と活用方法
+            - **参照**: [リリースノートへのリンク](URL)
+
+          ### パフォーマンス改善
+
+          - 改善内容と期待される効果
+            - **参照**: [リリースノートへのリンク](URL)
+
+          ### 安定性向上
+
+          - 修正されたバグや改善された動作
+            - **参照**: [リリースノートへのリンク](URL)
+
+          ---
+
+          ## 📦 Manifest Impact Analysis
+
+          **重要**: リポジトリ内のすべてのKubernetesマニフェストファイルを確認し、バージョンアップの影響を分析してください。
+
+          ### 影響を受けるマニフェスト
+
+          **影響があるマニフェストのみ回答してください**。影響がない場合は「影響なし」とだけ回答してください。
+
+          影響があるマニフェストについて：
+
+          #### [マニフェストファイル名]
+
+          - **使用しているAPIバージョン**: 例) apps/v1, batch/v1
+          - **影響内容**: 非推奨API、動作変更、Breaking Changeなど
+          - **必要なアクション**: 修正が必要な場合は具体的に回答
+          - **優先度**: Critical/High/Medium/Low
+          - **参照**: [関連するリリースノートのセクションへのリンク](URL)
+
+          ### 新機能で改善できる可能性
+
+          新機能を活用してパフォーマンスやセキュリティを改善できるマニフェストがあれば回答：
+          - マニフェストファイル名
+          - 適用できる新機能
+          - 期待される効果
+          - **参照**: [リリースノートへのリンク](URL)
+
+          ---
+
+          ## 📚 References
+
+          このセクションに、分析で参照したすべてのリリースノートのリンクをまとめて回答してください：
+
+          - [Kubernetes X.YY.Z Release Notes](URL)
+          - [Kubernetes X.YY CHANGELOG](URL)
+          - その他参照したドキュメント
 
           ---
 
           **分析の重要なポイント**:
-          1. リリースノートの事実に基づいて記載してください
-          2. 推測は避け、不明な点は「要確認」と記載してください
-          3. Urgent Upgrade Notes は必ず確認し、存在する場合は詳細に記載してください
-          4. 非推奨APIは Pluto で検証可能な形式で記載してください
-          5. actionable な情報を提供することを最優先してください
+          1. リリースノートの事実に基づいて回答してください
+          2. 推測は避け、不明な点は「要確認」と回答してください
+          3. Urgent Upgrade Notes は必ず確認し、存在する場合は詳細に回答してください
+          4. リポジトリ内のすべてのマニフェストファイルを確認し、具体的な影響を分析してください
+          5. 非推奨APIは具体的なファイル名とAPIバージョンを示してください
+          6. actionable な情報を提供することを最優先してください
+          7. **すべての情報に参照元のリリースノートリンクを含めてください**（最重要）
+          8. **リンクがない項目は不完全とみなされます。必ず各項目に参照リンクを追加してください**
+          9. **各セクションで情報を回答する際は、その情報がリリースノートのどこに回答されているか、具体的なURLを示してください**
           PROMPT_EOF
 
       - name: Run Claude analysis (headless mode)
@@ -239,32 +468,13 @@ jobs:
           <sub>🤖 Analyzed by Claude Code (Headless Mode) | [Download Full Report](https://github.com/${REPO}/actions/runs/${{ github.run_id }})</sub>
           COMMENT_EOF
 
-          # Find existing comment from github-actions bot
-          COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            | jq -r '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("🔄 GKE Version Upgrade Analysis"))) | .id' \
-            | head -1)
-
-          # Prepare JSON payload
-          jq -Rs '{"body": .}' comment-body.md > comment-payload.json
-
-          if [ -n "$COMMENT_ID" ]; then
-            # Update existing comment
-            echo "Updating existing comment: $COMMENT_ID"
-            curl -s -X PATCH \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${REPO}/issues/comments/${COMMENT_ID}" \
-              -d @comment-payload.json
-          else
-            # Create new comment
-            echo "Creating new comment"
-            curl -s -X POST \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              -d @comment-payload.json
-          fi
+      - name: Post analysis comment
+        uses: ./.github/actions/post-pr-comment
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          comment-file: comment-body.md
+          identifier: '🔄 GKE Version Upgrade Analysis'
 
       - name: Upload analysis report artifact
         uses: actions/upload-artifact@v4

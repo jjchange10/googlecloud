@@ -38,3 +38,8 @@ variable "project_services_list" {
 variable "prefix" {
   type = string
 }
+
+variable "github_repository" {
+  type        = string
+  description = "GitHubリポジトリ名（例: owner/repo）"
+}
