@@ -31,7 +31,6 @@ jobs:
       - name: Parse GKE version config
         id: parse-config
         run: |
-          # yamlÕ¡¤ëK‰$’­Ö‹
           CLUSTER_NAME=$(yq eval '.cluster_name' version/dev/gke-version.yaml)
           ENV=$(yq eval '.env' version/dev/gke-version.yaml)
           CONTROL_PLANE_VERSION=$(yq eval '.controlplane.version' version/dev/gke-version.yaml)
@@ -63,7 +62,6 @@ jobs:
 
       - name: Upgrade GKE Node Pools
         run: |
-          # YyfnÎüÉ×üë’Ö—Wf¢Ã×°ìüÉ
           NODE_POOLS=$(gcloud container node-pools list \
             --cluster=${{ steps.parse-config.outputs.cluster_name }} \
             --region=${{ secrets.GCP_REGION }} \
