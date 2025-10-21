@@ -6,8 +6,8 @@ env: dev
 
 # コントロールプレーンのバージョン
 controlplane:
-  version: "1.33.5-gke.1080000"
+  version: "1.33.5-gke.1125000"
 
 # ノードプールのバージョン
 nodes:
-  version: "1.33.5-gke.1080000"
+  version: "1.33.5-gke.1125000"
