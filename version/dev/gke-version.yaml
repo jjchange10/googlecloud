@@ -1,0 +1,13 @@
+# GKEクラスターのバージョン設定
+# このファイルを編集してコミットすると、自動的にGKEクラスターがアップグレードされます
+
+cluster_name: test-tokyo-cluster
+env: dev
+
+# コントロールプレーンのバージョン
+controlplane:
+  version: "1.33.5-gke.1080000"
+
+# ノードプールのバージョン
+nodes:
+  version: "1.33.5-gke.1080000"
