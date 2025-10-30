@@ -124,10 +124,12 @@ jobs:
       - name: Upgrade GKE Control Plane
         if: steps.check-controlplane-version.outputs.cp_versions_are_same == 'false'
         run: |
-          gcloud container clusters upgrade ${{ steps.parse-config.outputs.cluster_name }} \
+          CLUSTER_NAME="${{ steps.parse-config.outputs.cluster_name }}"
+          LOCATION="${{ steps.parse-config.outputs.location }}"
+          gcloud container clusters upgrade $CLUSTER_NAME \
             --master \
             --cluster-version=${{ steps.parse-config.outputs.control_plane_version }} \
-            --location=${{ steps.parse-config.outputs.location }} \
+            --location=$LOCATION \
             --quiet \
             --async
           
