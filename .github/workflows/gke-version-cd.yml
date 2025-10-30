@@ -190,11 +190,14 @@ jobs:
       - name: Upgrade GKE Node Pools
         if: steps.parse-config.outputs.cluster_type == 'standard'
         run: |
+          CLUSTER_NAME="${{ steps.parse-config.outputs.cluster_name }}"
+          TARGET_VERSION="${{ steps.parse-config.outputs.node_version }}"
+          LOCATION="${{ steps.parse-config.outputs.location }}"
           gcloud container node-pools list \
-            --cluster="$CLUSTER_NAME" \
-            --location="$LOCATION" \
-            --format="value(name, version)" | while IFS=$'\t' read -r POOL_NAME CURRENT_VERSION; do
-
+              --cluster=$CLUSTER_NAME \
+              --location=$LOCATION \
+              --format="value(name,currentVersion)" | while IFS=$'\t' read -r POOL_NAME CURRENT_VERSION; do
+          
             echo "---"
             echo "Checking Node Pool: $POOL_NAME"
             echo "Current version: $CURRENT_VERSION"
