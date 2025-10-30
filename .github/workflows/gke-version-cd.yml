@@ -221,7 +221,7 @@ jobs:
               echo "Operationが開始されるまで待機しています。"
               sleep 10
 
-              OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)")
+              OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $POOL_NAME AND STATUS=RUNNING" --format="value(NAME)")
               echo "操作IDを監視しています: $OPERATION_ID"
 
               while true; do
