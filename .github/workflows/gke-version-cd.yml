@@ -131,6 +131,9 @@ jobs:
             --quiet
             --async
           
+          echo "Operationが開始されるまで待機しています。"
+          sleep 10 
+          
           OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)" 2>/dev/null)
           echo "操作IDを監視しています: $OPERATION_ID"
           while true; do
@@ -212,6 +215,9 @@ jobs:
                         --location=$LOCATION \
                         --quiet \
                         --async
+              
+              echo "Operationが開始されるまで待機しています。"
+              sleep 10
 
               OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)")
               echo "操作IDを監視しています: $OPERATION_ID"
