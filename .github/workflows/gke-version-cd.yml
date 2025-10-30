@@ -213,12 +213,12 @@ jobs:
                         --quiet \
                         --async
 
-              OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)" 2>/dev/null)
+              OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)")
               echo "操作IDを監視しています: $OPERATION_ID"
 
               while true; do
                   # describeコマンドで現在のステータスを取得
-                  STATUS=$(gcloud container operations describe "$OPERATION_ID" --location=asia-northeast1 --format="value(status)" 2>/dev/null)
+                  STATUS=$(gcloud container operations describe "$OPERATION_ID" --location=asia-northeast1 --format="value(status)")
 
                   if [ "$STATUS" = "DONE" ]; then
                       echo "操作 $OPERATION_ID は正常に完了しました。"
