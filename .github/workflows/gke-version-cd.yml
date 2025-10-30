@@ -6,18 +6,56 @@ on:
       - main
       - develop
     paths:
-      - 'version/dev/gke-version.yaml'
+      - 'version/dev/*/gke-version.yaml'
+
+env:
+  GCP_PROJECT_ID: 'test-kose-460406'
+  GCP_REGION: 'asia-northeast1'
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  upgrade-gke:
+  get-changed-files:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set_matrix.outputs.matrix }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get changed yaml files
+        id: changed_files
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            version/dev/*/gke-version.yaml
+          matrix: true
+      - name: Set matrix from changed files
+        id: set_matrix
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
+        run: |
+          matrix=$(echo "$ALL_CHANGED_FILES" | jq -c '[.[] | split("/") |
+          {
+            "env": .[1],
+            "file": .[2],
+          }
+          ] | unique')
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+  upgrade-gke:
+    needs: get-changed-files
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
+      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -31,51 +69,169 @@ jobs:
       - name: Parse GKE version config
         id: parse-config
         run: |
-          CLUSTER_NAME=$(yq eval '.cluster_name' version/dev/gke-version.yaml)
-          ENV=$(yq eval '.env' version/dev/gke-version.yaml)
-          CONTROL_PLANE_VERSION=$(yq eval '.controlplane.version' version/dev/gke-version.yaml)
-          NODE_VERSION=$(yq eval '.nodes.version' version/dev/gke-version.yaml)
+          FILE_PATH="version/${{ matrix.env }}/${{ matrix.file }}/gke-version.yaml"
+          CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
+          CLUSTER_TYPE=$(yq eval '.cluster_type' "$FILE_PATH")
+          LOCATION=$(yq eval '.location' "$FILE_PATH")
+          CONTROL_PLANE_VERSION=$(yq eval '.control-plane.gke-version' "$FILE_PATH")
+          NODE_VERSION=""
 
-          echo "cluster_name=${CLUSTER_NAME}" >> $GITHUB_OUTPUT
-          echo "env=${ENV}" >> $GITHUB_OUTPUT
-          echo "control_plane_version=${CONTROL_PLANE_VERSION}" >> $GITHUB_OUTPUT
-          echo "node_version=${NODE_VERSION}" >> $GITHUB_OUTPUT
+          if [[ "${CLUSTER_TYPE}" == "standard" ]]; then
+            # "standard" でない時だけ、yqで .node-pool.gke-version を読み込みます
+            NODE_VERSION=$(yq eval '.node-pool.gke-version' "$FILE_PATH")
+          fi
 
-          echo "Cluster: ${CLUSTER_NAME}"
-          echo "Environment: ${ENV}"
-          echo "Control Plane Version: ${CONTROL_PLANE_VERSION}"
-          echo "Node Version: ${NODE_VERSION}"
+          {
+            echo "cluster_name=${CLUSTER_NAME}"
+            echo "cluster_type=${CLUSTER_TYPE}"
+            echo "location=${LOCATION}"
+            echo "control_plane_version=${CONTROL_PLANE_VERSION}"
+            echo "node_version=${NODE_VERSION}"
+          } >> "$GITHUB_OUTPUT"
 
+      - name: Current Version Check
+        id: check-versions
+        run: |
+          # --format="json(...)" を使い、json 形式でバージョンを取得
+          JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+            --location="${{ steps.parse-config.outputs.location }}" \
+            --format="json(currentMasterVersion,currentNodeVersion)")
+
+
+          # jq で各バージョンをパース
+          CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+          CURRENT_NP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentNodeVersion)
+
+          {
+            echo "current_cp_version=${CURRENT_CP_VER}"
+            echo "current_np_version=${CURRENT_NP_VER}"
+          } >> "$GITHUB_OUTPUT"
+      
+      - name: Check GKE ControlPlane Version
+        id: check-controlplane-version
+        run: |
+          # Control Plane Version Check
+          CP_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+          CURRENT_CP_VERSION="${{ steps.check-versions.outputs.current_cp_version }}"
+          if [ "$CP_VERSION" == "$CURRENT_CP_VERSION" ]; then
+            echo "✅ The current version and the upgrade target version are the same version.."
+            echo "cp_versions_are_same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The current version and the upgrade target version are different. The upgrade will now begin."
+            echo "cp_versions_are_same=false" >> "$GITHUB_OUTPUT"
+          fi
+      
       - name: Upgrade GKE Control Plane
+        if: steps.check-controlplane-version.outputs.cp_versions_are_same == 'false'
         run: |
           gcloud container clusters upgrade ${{ steps.parse-config.outputs.cluster_name }} \
             --master \
             --cluster-version=${{ steps.parse-config.outputs.control_plane_version }} \
-            --region=${{ secrets.GCP_REGION }} \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --location=${{ steps.parse-config.outputs.location }} \
             --quiet
+            --async
+          
+          OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)" 2>/dev/null)
+          echo "操作IDを監視しています: $OPERATION_ID"
+          while true; do
+              # describeコマンドで現在のステータスを取得
+              STATUS=$(gcloud container operations describe "$OPERATION_ID" --location=asia-northeast1 --format="value(status)" 2>/dev/null)
 
-      - name: Wait for Control Plane Upgrade
+              if [ "$STATUS" = "DONE" ]; then
+                  echo "操作 $OPERATION_ID は正常に完了しました。"
+                  break
+              elif [ "$STATUS" = "ERROR" ]; then
+                  echo "エラー: 操作 $OPERATION_ID は失敗したか、見つかりません。"
+                  exit 1
+              elif [ "$STATUS" = "RUNNING" ]; then
+                  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 操作はまだ $STATUS です。60秒待機します..."
+                  sleep 60
+              else
+                  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 不明なステータス: $STATUS"
+                  exit 1
+              fi
+          done
+
+      - name: Check Upgrade GKE ControlPlane Version
         run: |
-          echo "Waiting for control plane upgrade to complete..."
-          sleep 60
+          # --format="json(...)" を使い、json 形式でバージョンを取得
+          JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+            --location="${{ steps.parse-config.outputs.location }}" \
+            --format="json(currentMasterVersion)")
+
+          CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+          CP_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+          if [ "$CP_VERSION" == "$CURRENT_CP_VER" ]; then
+            echo "✅ The upgrade was completed without any issues."
+          else
+            echo "There are differences in the upgrade version. Please check."
+            exit 1
+          fi
+
+      - name: Check GKE NodePool Version
+        if: steps.parse-config.outputs.cluster_type == 'standard'
+        id: check-nodepool-version
+        run: |
+          # Node Pool Version Check
+          NP_VERSION="${{ steps.parse-config.outputs.node_version }}"
+          CURRENT_NP_VERSION="${{ steps.check-versions.outputs.current_np_version }}"
+          if [ "$NP_VERSION" == "" ] || [ "$NP_VERSION" == "null" ]; then
+            echo "::error::Error: 'node_version' is not set."
+            echo "'node_version' is required for Standard clusters."
+            exit 1
+          elif [ "$NP_VERSION" == "$CURRENT_NP_VERSION" ]; then
+            echo "✅ The current version and the upgrade target version are the same version.."
+            echo "np_versions_are_same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The current version and the upgrade target version are different. The upgrade will now begin."
+            echo "np_versions_are_same=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upgrade GKE Node Pools
+        if: steps.parse-config.outputs.cluster_type == 'standard'
         run: |
-          NODE_POOLS=$(gcloud container node-pools list \
-            --cluster=${{ steps.parse-config.outputs.cluster_name }} \
-            --region=${{ secrets.GCP_REGION }} \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
-            --format="value(name)")
+          gcloud container node-pools list \
+            --cluster="$CLUSTER_NAME" \
+            --location="$LOCATION" \
+            --format="value(name, version)" | while IFS=$'\t' read -r POOL_NAME CURRENT_VERSION; do
 
-          for POOL in $NODE_POOLS; do
-            echo "Upgrading node pool: $POOL"
-            gcloud container clusters upgrade ${{ steps.parse-config.outputs.cluster_name }} \
-              --node-pool=$POOL \
-              --cluster-version=${{ steps.parse-config.outputs.node_version }} \
-              --region=${{ secrets.GCP_REGION }} \
-              --project=${{ secrets.GCP_PROJECT_ID }} \
-              --quiet
+            echo "---"
+            echo "Checking Node Pool: $POOL_NAME"
+            echo "Current version: $CURRENT_VERSION"
+
+            if [ "$CURRENT_VERSION" == "$TARGET_VERSION" ]; then
+              echo "✅ Node pool '$POOL_NAME' is already at target version $TARGET_VERSION. Skipping."
+            else
+              echo "⚠️ Node pool '$POOL_NAME' is at $CURRENT_VERSION. Upgrading to $TARGET_VERSION..."
+              gcloud container clusters upgrade $CLUSTER_NAME \
+                        --node-pool="$POOL_NAME" \
+                        --cluster-version=$TARGET_VERSION \
+                        --location=$LOCATION \
+                        --quiet \
+                        --async
+
+              OPERATION_ID=$(gcloud container operations list --location=$LOCATION --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING" --format="value(NAME)" 2>/dev/null)
+              echo "操作IDを監視しています: $OPERATION_ID"
+
+              while true; do
+                  # describeコマンドで現在のステータスを取得
+                  STATUS=$(gcloud container operations describe "$OPERATION_ID" --location=asia-northeast1 --format="value(status)" 2>/dev/null)
+
+                  if [ "$STATUS" = "DONE" ]; then
+                      echo "操作 $OPERATION_ID は正常に完了しました。"
+                      break
+                  elif [ "$STATUS" = "ERROR" ]; then
+                      echo "エラー: 操作 $OPERATION_ID は失敗したか、見つかりません。"
+                      exit 1
+                  elif [ "$STATUS" = "RUNNING" ]; then
+                      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 操作はまだ $STATUS です。60秒待機します..."
+                      sleep 60
+                  else
+                      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 不明なステータス: $STATUS"
+                      exit 1
+                  fi
+              done
+            fi
           done
 
       - name: Verify Upgrade
