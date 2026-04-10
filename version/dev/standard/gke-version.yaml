@@ -13,8 +13,8 @@ cluster_name: test-tokyo-cluster
 cluster_type: standard
 location: asia-northeast1
 control-plane:
-  gke-version: 1.35.2-gke.1485000
+  gke-version: 1.35.2-gke.1842000
 # standardクラスタのみ設定
 node-pool:
-  gke-version: 1.35.2-gke.1485000
+  gke-version: 1.35.2-gke.1842000
 #
