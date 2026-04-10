@@ -173,7 +173,7 @@ jobs:
       - name: Combine Matrices
         id: combine
         run: |
-          COMBINED=$(find all-matrices -name "matrix.json" -exec cat {} \; | jq -s 'add // []')
+          COMBINED=$(find all-matrices -name "matrix.json" -exec cat {} \; | jq -s -c 'add // []')
           COUNT=$(echo "$COMBINED" | jq 'length')
 
           if [ "$COUNT" -eq 0 ]; then
