@@ -13,25 +13,25 @@ permissions:
   id-token: write
 
 jobs:
+  # Job 1: 変更されたファイルからクラスタMatrixを構築
   get-changed-files:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set_matrix.outputs.matrix }}
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
-      - name: Get changed yaml files
+      - name: Get Changed YAML Files
         id: changed_files
-        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323  # v47.0.5
+        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5
         with:
-          files: |
-            version/**/gke-version.yaml
+          files: version/**/gke-version.yaml
           matrix: true
 
-      - name: Set matrix from changed files
+      - name: Set Matrix
         id: set_matrix
         env:
           ALL_CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
@@ -44,33 +44,145 @@ jobs:
           ] | unique')
           echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
 
-  upgrade-gke:
+  # Job 2: Control Planeアップグレード（クラスタ並列）
+  upgrade-control-plane:
     needs: get-changed-files
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
       fail-fast: false
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set uppercase env name
-        run: echo "UPPER_ENV=$(echo "${{ matrix.env }}" | tr '[:lower:]' '[:upper:]')" >> "$GITHUB_ENV"
-
-      - name: Debug - Show environment
-        run: |
-          echo "Environment: ${{ matrix.env }}"
-          echo "Uppercase Environment: ${UPPER_ENV}"
-          echo "Cluster Name: ${{ matrix.cluster_name }}"
-
-      - name: Run GKE Upgrade CD
-        uses: ./.github/actions/gke-upgrade-cd
+      - name: Upgrade Control Plane
+        uses: ./.github/actions/gke-control-plane-upgrade
         with:
           env: ${{ matrix.env }}
           cluster_name: ${{ matrix.cluster_name }}
           version_file_path: version
+          gcp_project_id: test-kose-460406
+          gcp_workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+  # Job 3: Node Pool Matrix構築（クラスタ並列）
+  get-nodepool-matrix:
+    needs: upgrade-control-plane
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Build Node Pool Matrix
+        id: build-matrix
+        run: |
+          FILE_PATH="version/${{ matrix.env }}/${{ matrix.cluster_name }}/gke-version.yaml"
+          CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
+          CLUSTER_TYPE=$(yq eval '.cluster_type' "$FILE_PATH")
+          LOCATION=$(yq eval '.location' "$FILE_PATH")
+          TARGET_VERSION=$(yq eval '.node-pool.gke-version' "$FILE_PATH")
+
+          if [[ "${CLUSTER_TYPE}" == "standard" ]]; then
+            NODE_POOLS=$(gcloud container node-pools list \
+              --cluster="${CLUSTER_NAME}" \
+              --location="${LOCATION}" \
+              --format="json(name,version)" \
+              --project="test-kose-460406")
+
+            MATRIX_JSON=$(echo "$NODE_POOLS" | jq -c \
+              --arg env "${{ matrix.env }}" \
+              --arg cluster "$CLUSTER_NAME" \
+              --arg location "$LOCATION" \
+              --arg target "$TARGET_VERSION" \
+              '[.[] | {
+                env: $env,
+                cluster_name: $cluster,
+                location: $location,
+                node_pool_name: .name,
+                current_version: .version,
+                target_version: $target
+              }]')
+
+            echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Matrix
+        run: |
+          mkdir -p matrices
+          echo '${{ steps.build-matrix.outputs.matrix }}' > matrices/matrix.json
+
+      - name: Upload Matrix Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodepool-matrix-${{ matrix.env }}-${{ matrix.cluster_name }}
+          path: matrices/
+          retention-days: 1
+
+  # Job 4: Node Pool Matrix統合
+  aggregate-nodepool-matrix:
+    needs: get-nodepool-matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.combine.outputs.matrix }}
+      has_nodepools: ${{ steps.combine.outputs.has_nodepools }}
+    steps:
+      - name: Download All Matrices
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nodepool-matrix-*
+          path: all-matrices
+
+      - name: Combine Matrices
+        id: combine
+        run: |
+          COMBINED=$(find all-matrices -name "matrix.json" -exec cat {} \; | jq -s 'add // []')
+          COUNT=$(echo "$COMBINED" | jq 'length')
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "has_nodepools=false" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_nodepools=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":$COMBINED}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Total node pools to upgrade: $COUNT"
+
+  # Job 5: Node Poolアップグレード（Node Pool並列）
+  upgrade-node-pools:
+    needs: aggregate-nodepool-matrix
+    if: needs.aggregate-nodepool-matrix.outputs.has_nodepools == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.aggregate-nodepool-matrix.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Upgrade Node Pool
+        uses: ./.github/actions/gke-nodepool-upgrade
+        with:
+          cluster_name: ${{ matrix.cluster_name }}
+          location: ${{ matrix.location }}
+          node_pool_name: ${{ matrix.node_pool_name }}
+          target_version: ${{ matrix.target_version }}
+          current_version: ${{ matrix.current_version }}
           gcp_project_id: test-kose-460406
           gcp_workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           gcp_service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}

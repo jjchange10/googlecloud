@@ -1,0 +1,137 @@
+name: GKE Control Plane Upgrade
+description: Upgrades GKE cluster control plane only
+
+inputs:
+  env:
+    description: 'Environment name (e.g., dev, prod)'
+    required: true
+  cluster_name:
+    description: 'Cluster name'
+    required: true
+  version_file_path:
+    description: 'Path to version directory'
+    required: true
+  gcp_project_id:
+    description: 'GCP Project ID'
+    required: true
+  gcp_workload_identity_provider:
+    description: 'GCP Workload Identity Provider'
+    required: true
+  gcp_service_account:
+    description: 'GCP Service Account'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+    - name: Parse GKE Version Config
+      id: parse-config
+      shell: bash
+      run: |
+        FILE_PATH="${{ inputs.version_file_path }}/${{ inputs.env }}/${{ inputs.cluster_name }}/gke-version.yaml"
+        CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
+        LOCATION=$(yq eval '.location' "$FILE_PATH")
+        CONTROL_PLANE_VERSION=$(yq eval '.control-plane.gke-version' "$FILE_PATH")
+
+        {
+          echo "cluster_name=${CLUSTER_NAME}"
+          echo "location=${LOCATION}"
+          echo "control_plane_version=${CONTROL_PLANE_VERSION}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Check Current Control Plane Version
+      id: check-versions
+      shell: bash
+      run: |
+        JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+          --location="${{ steps.parse-config.outputs.location }}" \
+          --format="json(currentMasterVersion)")
+
+        CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+        echo "current_cp_version=${CURRENT_CP_VER}" >> "$GITHUB_OUTPUT"
+
+    - name: Check if Upgrade Needed
+      id: check-upgrade
+      shell: bash
+      run: |
+        CP_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+        CURRENT_CP_VERSION="${{ steps.check-versions.outputs.current_cp_version }}"
+
+        if [ "$CP_VERSION" == "$CURRENT_CP_VERSION" ]; then
+          echo "✅ Control Plane is already at target version $CP_VERSION"
+          echo "upgrade_needed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "⚠️  Control Plane will be upgraded from $CURRENT_CP_VERSION to $CP_VERSION"
+          echo "upgrade_needed=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upgrade Control Plane
+      if: steps.check-upgrade.outputs.upgrade_needed == 'true'
+      shell: bash
+      run: |
+        CLUSTER_NAME="${{ steps.parse-config.outputs.cluster_name }}"
+        LOCATION="${{ steps.parse-config.outputs.location }}"
+        VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+
+        gcloud container clusters upgrade $CLUSTER_NAME \
+          --master \
+          --cluster-version=$VERSION \
+          --location=$LOCATION \
+          --quiet \
+          --async
+
+        echo "Waiting for operation to start..."
+        sleep 30
+
+        OPERATION_ID=$(gcloud container operations list \
+          --location="$LOCATION" \
+          --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING AND TYPE=UPGRADE_MASTER" \
+          --format="value(NAME)" 2>/dev/null)
+
+        echo "Monitoring Operation ID: $OPERATION_ID"
+
+        while true; do
+          STATUS=$(gcloud container operations describe "$OPERATION_ID" \
+            --location="$LOCATION" \
+            --format="value(status)" 2>/dev/null)
+
+          if [ "$STATUS" = "DONE" ]; then
+            echo "✅ Control Plane upgrade completed successfully"
+            break
+          elif [ "$STATUS" = "ERROR" ]; then
+            echo "❌ Error: Control Plane upgrade failed"
+            exit 1
+          elif [ "$STATUS" = "RUNNING" ]; then
+            echo "Upgrade in progress... (waiting 60s)"
+            sleep 60
+          else
+            echo "Unknown status: $STATUS"
+            exit 1
+          fi
+        done
+
+    - name: Verify Control Plane Version
+      shell: bash
+      run: |
+        JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+          --location="${{ steps.parse-config.outputs.location }}" \
+          --format="json(currentMasterVersion)")
+
+        CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+        TARGET_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+
+        if [ "$TARGET_VERSION" == "$CURRENT_CP_VER" ]; then
+          echo "✅ Verification successful: Control Plane is at $CURRENT_CP_VER"
+        else
+          echo "❌ Verification failed: Expected $TARGET_VERSION, got $CURRENT_CP_VER"
+          exit 1
+        fi
