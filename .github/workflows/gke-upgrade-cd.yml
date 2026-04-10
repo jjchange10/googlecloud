@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set_matrix.outputs.matrix }}
+      has_changes: ${{ steps.set_matrix.outputs.has_changes }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -36,17 +37,38 @@ jobs:
         env:
           ALL_CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
         run: |
-          matrix=$(echo "$ALL_CHANGED_FILES" | jq -c '[.[] | split("/") |
-          {
-            "env": .[1],
-            "cluster_name": .[2]
-          }
-          ] | unique')
-          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+          set +e  # エラーでも続行
+
+          echo "DEBUG: ALL_CHANGED_FILES = '$ALL_CHANGED_FILES'"
+          echo "DEBUG: any_changed = ${{ steps.changed_files.outputs.any_changed }}"
+
+          if [ -z "$ALL_CHANGED_FILES" ] || [ "$ALL_CHANGED_FILES" == "[]" ]; then
+            echo "No changes detected in version files"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "DEBUG: Processing files..."
+            matrix=$(echo "$ALL_CHANGED_FILES" | jq -c '[.[] | split("/") | {env: .[1], cluster_name: .[2]}] | unique')
+            exit_code=$?
+
+            echo "DEBUG: jq exit code = $exit_code"
+            echo "DEBUG: matrix = '$matrix'"
+
+            if [ $exit_code -eq 0 ] && [ -n "$matrix" ]; then
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+              echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: Failed to build matrix"
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
 
   # Job 2: Control Planeアップグレード（クラスタ並列）
   upgrade-control-plane:
     needs: get-changed-files
+    if: needs.get-changed-files.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
@@ -67,7 +89,8 @@ jobs:
 
   # Job 3: Node Pool Matrix構築（クラスタ並列）
   get-nodepool-matrix:
-    needs: upgrade-control-plane
+    needs: [get-changed-files, upgrade-control-plane]
+    if: needs.get-changed-files.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
@@ -134,7 +157,8 @@ jobs:
 
   # Job 4: Node Pool Matrix統合
   aggregate-nodepool-matrix:
-    needs: get-nodepool-matrix
+    needs: [get-changed-files, get-nodepool-matrix]
+    if: needs.get-changed-files.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.combine.outputs.matrix }}
