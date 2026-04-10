@@ -94,7 +94,7 @@ runs:
 
         OPERATION_ID=$(gcloud container operations list \
           --location="$LOCATION" \
-          --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING AND TYPE=UPGRADE_MASTER" \
+          --filter="TARGET ~ ^$CLUSTER_NAME$ AND STATUS=RUNNING AND TYPE=UPGRADE_MASTER" \
           --format="value(NAME)" 2>/dev/null)
 
         echo "Monitoring Operation ID: $OPERATION_ID"
