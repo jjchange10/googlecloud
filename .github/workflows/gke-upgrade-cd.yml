@@ -59,12 +59,18 @@ jobs:
       - name: Set uppercase env name
         run: echo "UPPER_ENV=$(echo "${{ matrix.env }}" | tr '[:lower:]' '[:upper:]')" >> "$GITHUB_ENV"
 
+      - name: Debug - Show environment
+        run: |
+          echo "Environment: ${{ matrix.env }}"
+          echo "Uppercase Environment: ${UPPER_ENV}"
+          echo "Cluster Name: ${{ matrix.cluster_name }}"
+
       - name: Run GKE Upgrade CD
         uses: ./.github/actions/gke-upgrade-cd
         with:
           env: ${{ matrix.env }}
           cluster_name: ${{ matrix.cluster_name }}
           version_file_path: version
-          gcp_project_id: ${{ secrets[format('{0}_GCP_PROJECT_ID', env.UPPER_ENV)] }}
-          gcp_workload_identity_provider: ${{ secrets[format('{0}_WIF_PROVIDER', env.UPPER_ENV)] }}
-          gcp_service_account: ${{ secrets[format('{0}_WIF_SERVICE_ACCOUNT', env.UPPER_ENV)] }}
+          gcp_project_id: test-kose-460406
+          gcp_workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
