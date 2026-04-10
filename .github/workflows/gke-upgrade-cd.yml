@@ -1,0 +1,70 @@
+name: GKE Upgrade CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'version/**/gke-version.yaml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  get-changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set_matrix.outputs.matrix }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Get changed yaml files
+        id: changed_files
+        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323  # v47.0.5
+        with:
+          files: |
+            version/**/gke-version.yaml
+          matrix: true
+
+      - name: Set matrix from changed files
+        id: set_matrix
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
+        run: |
+          matrix=$(echo "$ALL_CHANGED_FILES" | jq -c '[.[] | split("/") |
+          {
+            "env": .[1],
+            "cluster_name": .[2]
+          }
+          ] | unique')
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+
+  upgrade-gke:
+    needs: get-changed-files
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.get-changed-files.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set uppercase env name
+        run: echo "UPPER_ENV=$(echo "${{ matrix.env }}" | tr '[:lower:]' '[:upper:]')" >> "$GITHUB_ENV"
+
+      - name: Run GKE Upgrade CD
+        uses: ./.github/actions/gke-upgrade-cd
+        with:
+          env: ${{ matrix.env }}
+          cluster_name: ${{ matrix.cluster_name }}
+          version_file_path: version
+          gcp_project_id: ${{ secrets[format('{0}_GCP_PROJECT_ID', env.UPPER_ENV)] }}
+          gcp_workload_identity_provider: ${{ secrets[format('{0}_WIF_PROVIDER', env.UPPER_ENV)] }}
+          gcp_service_account: ${{ secrets[format('{0}_WIF_SERVICE_ACCOUNT', env.UPPER_ENV)] }}

@@ -1,12 +1,9 @@
-name: GKE Version Update CD
+name: GKE Version Update CD (Deprecated - Use gke-upgrade-cd.yml)
 
+# このワークフローは非推奨です。新しいワークフロー（gke-upgrade-cd.yml）を使用してください。
+# 自動実行は無効化されており、手動実行のみ可能です。
 on:
-  push:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'version/dev/*/gke-version.yaml'
+  workflow_dispatch:
 
 env:
   GCP_PROJECT_ID: 'test-kose-460406'
