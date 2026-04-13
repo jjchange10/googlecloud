@@ -70,12 +70,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Parse Version Config
+        id: parse-config
+        run: |
+          FILE_PATH="version/${{ matrix.env }}/${{ matrix.cluster_name }}/gke-version.yaml"
+          CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
+          LOCATION=$(yq eval '.location' "$FILE_PATH")
+          TARGET_VERSION=$(yq eval '.control-plane.gke-version' "$FILE_PATH")
+
+          # Get current control plane version
+          CURRENT_VERSION=$(gcloud container clusters describe "$CLUSTER_NAME" \
+            --location="$LOCATION" \
+            --project=test-kose-460406 \
+            --format="value(currentMasterVersion)")
+
+          echo "cluster_name=$CLUSTER_NAME" >> "$GITHUB_OUTPUT"
+          echo "location=$LOCATION" >> "$GITHUB_OUTPUT"
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "target_version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Upgrade Control Plane
         uses: ./.github/actions/gke-control-plane-upgrade
         with:
-          env: ${{ matrix.env }}
-          cluster_name: ${{ matrix.cluster_name }}
-          version_file_path: version
+          cluster_name: ${{ steps.parse-config.outputs.cluster_name }}
+          location: ${{ steps.parse-config.outputs.location }}
+          current_version: ${{ steps.parse-config.outputs.current_version }}
+          target_version: ${{ steps.parse-config.outputs.target_version }}
           gcp_project_id: test-kose-460406
           gcp_workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           gcp_service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
