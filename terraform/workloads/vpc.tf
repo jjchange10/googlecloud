@@ -22,6 +22,10 @@ module "vpc" {
             range_name = "gke-services-range"
             ip_cidr_range = "172.18.0.0/22"
         },
+        {
+            range_name = "gke-pods-range-2"
+            ip_cidr_range = "172.19.0.0/16"
+        },
     ]
   }
 }

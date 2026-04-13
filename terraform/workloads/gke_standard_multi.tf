@@ -24,7 +24,7 @@ resource "google_container_cluster" "cluster_multi" {
   }
 
   ip_allocation_policy {
-    cluster_secondary_range_name  = local.pod_secondary_range
+    cluster_secondary_range_name  = "gke-pods-range-2"
     services_secondary_range_name = local.service_secondary_range
   }
 
