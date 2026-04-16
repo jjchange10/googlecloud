@@ -1,0 +1,229 @@
+name: GKE Upgrade CD
+description: Automates GKE cluster upgrades for control plane and node pools
+
+inputs:
+  env:
+    description: 'Environment name (e.g., dev, prod)'
+    required: true
+  cluster_name:
+    description: 'Cluster name (e.g., zoolake, gke-control-plane)'
+    required: true
+  version_file_path:
+    description: 'Path to version.yaml file'
+    required: true
+  gcp_project_id:
+    description: 'GCP Project ID'
+    required: true
+  gcp_workload_identity_provider:
+    description: 'GCP Workload Identity Provider'
+    required: true
+  gcp_service_account:
+    description: 'GCP Service Account for Workload Identity'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate google cloud
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+    - name: Parse GKE version config
+      id: parse-config
+      shell: bash
+      run: |
+        FILE_PATH="${{ inputs.version_file_path }}/${{ inputs.env }}/${{ inputs.cluster_name }}/gke-version.yaml"
+        CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
+        CLUSTER_TYPE=$(yq eval '.cluster_type' "$FILE_PATH")
+        LOCATION=$(yq eval '.location' "$FILE_PATH")
+        CONTROL_PLANE_VERSION=$(yq eval '.control-plane.gke-version' "$FILE_PATH")
+        NODE_VERSION=""
+
+        if [[ "${CLUSTER_TYPE}" == "standard" ]]; then
+          NODE_VERSION=$(yq eval '.node-pool.gke-version' "$FILE_PATH")
+        fi
+
+        {
+          echo "cluster_name=${CLUSTER_NAME}"
+          echo "cluster_type=${CLUSTER_TYPE}"
+          echo "location=${LOCATION}"
+          echo "control_plane_version=${CONTROL_PLANE_VERSION}"
+          echo "node_version=${NODE_VERSION}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Current Version Check
+      id: check-versions
+      shell: bash
+      run: |
+        # --format="json(...)" を使い、json 形式でバージョンを取得
+        JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+          --location="${{ steps.parse-config.outputs.location }}" \
+          --format="json(currentMasterVersion,currentNodeVersion)")
+
+        # jq で各バージョンをパース
+        CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+        CURRENT_NP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentNodeVersion)
+
+        {
+          echo "current_cp_version=${CURRENT_CP_VER}"
+          echo "current_np_version=${CURRENT_NP_VER}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Check GKE ControlPlane Version
+      id: check-controlplane-version
+      shell: bash
+      run: |
+        # Control Plane Version Check
+        CP_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+        CURRENT_CP_VERSION="${{ steps.check-versions.outputs.current_cp_version }}"
+        if [ "$CP_VERSION" == "$CURRENT_CP_VERSION" ]; then
+          echo "✅ The current version and the upgrade target version are the same version."
+          echo "cp_versions_are_same=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "The current version and the upgrade target version are different. The upgrade will now begin."
+          echo "cp_versions_are_same=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upgrade GKE Control Plane
+      if: steps.check-controlplane-version.outputs.cp_versions_are_same == 'false'
+      shell: bash
+      run: |
+        CLUSTER_NAME="${{ steps.parse-config.outputs.cluster_name }}"
+        LOCATION="${{ steps.parse-config.outputs.location }}"
+        gcloud container clusters upgrade $CLUSTER_NAME \
+          --master \
+          --cluster-version=${{ steps.parse-config.outputs.control_plane_version }} \
+          --location=$LOCATION \
+          --quiet \
+          --async
+
+        echo "Waiting until the operation begins."
+        sleep 30
+
+        OPERATION_ID=$(gcloud container operations list --location="$LOCATION" --filter="TARGET ~ $CLUSTER_NAME AND STATUS=RUNNING AND TYPE=UPGRADE_MASTER" --format="value(NAME)" 2>/dev/null)
+        echo "Monitoring Operation ID: $OPERATION_ID"
+        while true; do
+            # describeコマンドで現在のステータスを取得
+            STATUS=$(gcloud container operations describe "$OPERATION_ID" --location="$LOCATION" --format="value(status)" 2>/dev/null)
+
+            if [ "$STATUS" = "DONE" ]; then
+                echo "Operation ID: $OPERATION_ID completed successfully."
+                break
+            elif [ "$STATUS" = "ERROR" ]; then
+                echo "[Error] Operation ID: $OPERATION_ID failed or could not be found."
+                exit 1
+            elif [ "$STATUS" = "RUNNING" ]; then
+                echo "Operation is still in $STATUS. Waiting for 1 minutes..."
+                sleep 60
+            else
+                echo "Unknown status: $STATUS"
+                exit 1
+            fi
+        done
+
+    - name: Check Upgrade GKE ControlPlane Version
+      shell: bash
+      run: |
+        # --format="json(...)" を使い、json 形式でバージョンを取得
+        JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+          --location="${{ steps.parse-config.outputs.location }}" \
+          --format="json(currentMasterVersion)")
+
+        CURRENT_CP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentMasterVersion)
+        CP_VERSION="${{ steps.parse-config.outputs.control_plane_version }}"
+        if [ "$CP_VERSION" == "$CURRENT_CP_VER" ]; then
+          echo "✅ The upgrade was completed without any issues."
+        else
+          echo "There are differences in the upgrade version. Please check."
+          exit 1
+        fi
+
+    - name: Check GKE NodePool Version
+      if: steps.parse-config.outputs.cluster_type == 'standard'
+      id: check-nodepool-version
+      shell: bash
+      run: |
+        # Node Pool Version Check
+        NP_VERSION="${{ steps.parse-config.outputs.node_version }}"
+        if [ "$NP_VERSION" == "" ] || [ "$NP_VERSION" == "null" ]; then
+          echo "::error::Error: 'node_version' is not set."
+          echo "'node_version' is required for Standard clusters."
+          exit 1
+        fi
+
+    - name: Upgrade GKE Node Pools
+      if: steps.parse-config.outputs.cluster_type == 'standard'
+      shell: bash
+      run: |
+        CLUSTER_NAME="${{ steps.parse-config.outputs.cluster_name }}"
+        TARGET_VERSION="${{ steps.parse-config.outputs.node_version }}"
+        LOCATION="${{ steps.parse-config.outputs.location }}"
+        gcloud container node-pools list \
+          --cluster="$CLUSTER_NAME" \
+          --location="$LOCATION" \
+          --format="value(name, version)" | while IFS=$'\t' read -r POOL_NAME CURRENT_VERSION; do
+
+          echo "---"
+          echo "Checking Node Pool: $POOL_NAME"
+          echo "Current version: $CURRENT_VERSION"
+
+          if [ "$CURRENT_VERSION" == "$TARGET_VERSION" ]; then
+            echo "✅ Node pool '$POOL_NAME' is already at target version $TARGET_VERSION. Skipping."
+          else
+            echo "⚠️ Node pool '$POOL_NAME' is at $CURRENT_VERSION. Upgrading to $TARGET_VERSION..."
+            gcloud container clusters upgrade $CLUSTER_NAME \
+                      --node-pool="$POOL_NAME" \
+                      --cluster-version=$TARGET_VERSION \
+                      --location=$LOCATION \
+                      --quiet \
+                      --async
+
+            echo "Waiting until the operation begins."
+            sleep 30
+
+            OPERATION_ID=$(gcloud container operations list --location="$LOCATION" --filter="TARGET ~ $POOL_NAME AND STATUS=RUNNING AND TYPE=UPGRADE_NODES" --format="value(NAME)")
+            echo "Monitoring Operation ID: $OPERATION_ID"
+
+            while true; do
+                # describeコマンドで現在のステータスを取得
+                STATUS=$(gcloud container operations describe "$OPERATION_ID" --location="$LOCATION" --format="value(status)")
+
+                if [ "$STATUS" = "DONE" ]; then
+                    echo "Operation ID: $OPERATION_ID completed successfully."
+                    break
+                elif [ "$STATUS" = "ERROR" ]; then
+                    echo "[Error] Operation ID: $OPERATION_ID failed or could not be found."
+                    exit 1
+                elif [ "$STATUS" = "RUNNING" ]; then
+                    echo "Operation is still in $STATUS. Waiting for 1 minutes..."
+                    sleep 60
+                else
+                    echo "Unknown status: $STATUS"
+                    exit 1
+                fi
+            done
+          fi
+        done
+
+    - name: Check Upgrade GKE NodePool Version
+      if: steps.parse-config.outputs.cluster_type == 'standard'
+      shell: bash
+      run: |
+        # --format="json(...)" を使い、json 形式でバージョンを取得
+        JSON_OUTPUT=$(gcloud container clusters describe "${{ steps.parse-config.outputs.cluster_name }}" \
+          --location="${{ steps.parse-config.outputs.location }}" \
+          --format="json(currentNodeVersion)")
+
+        CURRENT_NP_VER=$(echo "$JSON_OUTPUT" | jq -r .currentNodeVersion)
+        NP_VERSION="${{ steps.parse-config.outputs.node_version }}"
+        if [ "$NP_VERSION" == "$CURRENT_NP_VER" ]; then
+          echo "✅ The upgrade was completed without any issues."
+        else
+          echo "There are differences in the upgrade version. Please check."
+          exit 1
+        fi

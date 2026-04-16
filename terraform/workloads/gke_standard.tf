@@ -1,8 +1,8 @@
 data "google_client_config" "current" {}
 
 provider "kubernetes" {
-  host = "https://${google_container_cluster.cluster.endpoint}"
-  token = data.google_client_config.current.access_token
+  host                   = "https://${google_container_cluster.cluster.endpoint}"
+  token                  = data.google_client_config.current.access_token
   cluster_ca_certificate = base64decode(google_container_cluster.cluster.master_auth[0].cluster_ca_certificate)
 }
 
@@ -11,7 +11,6 @@ resource "google_container_cluster" "cluster" {
 
   name     = "${var.prefix}-cluster"
   location = var.region
-  min_master_version = "1.33.5-gke.1080000"
 
   enable_shielded_nodes    = false
   remove_default_node_pool = true # 下記の自分たちで作成したnodeを利用するために、defaultのnode_poolを削除
@@ -36,7 +35,7 @@ resource "google_container_cluster" "cluster" {
 
   # https://registry.terraform.io/providers/hashicorp/google/latest/docs/guides/using_gke_with_terraform#vpc-native-clusters
   ip_allocation_policy {
-    cluster_secondary_range_name = local.pod_secondary_range
+    cluster_secondary_range_name  = local.pod_secondary_range
     services_secondary_range_name = local.service_secondary_range
   }
 

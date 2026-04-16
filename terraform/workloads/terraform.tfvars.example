@@ -1,0 +1,12 @@
+# プロジェクトID
+base_project_id = "your-gcp-project-id"
+
+# リージョン
+region = "asia-northeast1"
+
+# プレフィックス
+prefix = "dev"
+
+# GitHubリポジトリ（owner/repo形式）
+# 例: "yourname/googlecloud"
+github_repository = "your-github-username/your-repo-name"

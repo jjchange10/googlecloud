@@ -9,12 +9,18 @@ terraform {
       source = "hashicorp/helm"
       version = "3.0.2"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
 provider "google" {
   project = var.base_project_id
-  region = var.region
+  region  = var.region
+
+  default_labels = local.common_labels
 }
 
 provider "helm" {

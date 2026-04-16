@@ -1,0 +1,121 @@
+name: GKE Node Pool Upgrade
+description: Upgrades a single GKE node pool
+
+inputs:
+  cluster_name:
+    description: 'Cluster name'
+    required: true
+  location:
+    description: 'Cluster location'
+    required: true
+  node_pool_name:
+    description: 'Node pool name'
+    required: true
+  target_version:
+    description: 'Target GKE version'
+    required: true
+  current_version:
+    description: 'Current node pool version'
+    required: true
+  gcp_project_id:
+    description: 'GCP Project ID'
+    required: true
+  gcp_workload_identity_provider:
+    description: 'GCP Workload Identity Provider'
+    required: true
+  gcp_service_account:
+    description: 'GCP Service Account'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+    - name: Check if Upgrade Needed
+      id: check-upgrade
+      shell: bash
+      run: |
+        CURRENT="${{ inputs.current_version }}"
+        TARGET="${{ inputs.target_version }}"
+
+        if [ "$CURRENT" == "$TARGET" ]; then
+          echo "✅ Node pool '${{ inputs.node_pool_name }}' is already at target version $TARGET"
+          echo "upgrade_needed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "⚠️  Node pool '${{ inputs.node_pool_name }}' will be upgraded from $CURRENT to $TARGET"
+          echo "upgrade_needed=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upgrade Node Pool
+      if: steps.check-upgrade.outputs.upgrade_needed == 'true'
+      shell: bash
+      run: |
+        CLUSTER_NAME="${{ inputs.cluster_name }}"
+        LOCATION="${{ inputs.location }}"
+        POOL_NAME="${{ inputs.node_pool_name }}"
+        VERSION="${{ inputs.target_version }}"
+
+        echo "Starting upgrade of node pool: $POOL_NAME"
+
+        gcloud container clusters upgrade $CLUSTER_NAME \
+          --node-pool="$POOL_NAME" \
+          --cluster-version=$VERSION \
+          --location=$LOCATION \
+          --quiet \
+          --async
+
+        echo "Waiting for operation to start..."
+        sleep 30
+
+        OPERATION_ID=$(gcloud container operations list \
+          --location="$LOCATION" \
+          --filter="TARGET ~ $POOL_NAME AND STATUS=RUNNING AND TYPE=UPGRADE_NODES" \
+          --format="value(NAME)")
+
+        echo "Monitoring Operation ID: $OPERATION_ID"
+
+        while true; do
+          STATUS=$(gcloud container operations describe "$OPERATION_ID" \
+            --location="$LOCATION" \
+            --format="value(status)")
+
+          if [ "$STATUS" = "DONE" ]; then
+            echo "✅ Node pool upgrade completed successfully"
+            break
+          elif [ "$STATUS" = "ERROR" ]; then
+            echo "❌ Error: Node pool upgrade failed"
+            exit 1
+          elif [ "$STATUS" = "RUNNING" ]; then
+            echo "Upgrade in progress... (waiting 60s)"
+            sleep 60
+          else
+            echo "Unknown status: $STATUS"
+            exit 1
+          fi
+        done
+
+    - name: Verify Node Pool Version
+      shell: bash
+      run: |
+        # 最新の情報を取得
+        CURRENT_VERSION=$(gcloud container node-pools describe "${{ inputs.node_pool_name }}" \
+          --cluster="${{ inputs.cluster_name }}" \
+          --location="${{ inputs.location }}" \
+          --format="value(version)")
+
+        TARGET_VERSION="${{ inputs.target_version }}"
+
+        if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
+          echo "✅ Verification successful: Node pool is at $CURRENT_VERSION"
+        else
+          echo "❌ Verification failed: Expected $TARGET_VERSION, got $CURRENT_VERSION"
+          exit 1
+        fi

@@ -3,14 +3,14 @@ variable "base_project_id" {
 }
 
 variable "region" {
-  type = string
+  type    = string
   default = "asia-northeast1"
 }
 
 variable "project_services_list" {
   description = "有効化するGoogleクラウドサービスのリスト"
   type        = list(string)
-  default     = [
+  default = [
     "container.googleapis.com",
     "servicenetworking.googleapis.com",
     "networkmanagement.googleapis.com",
@@ -32,6 +32,7 @@ variable "project_services_list" {
     "notebooks.googleapis.com",
     "dataflow.googleapis.com",
     "certificatemanager.googleapis.com",
+    "alloydb.googleapis.com",
   ]
 }
 
@@ -42,4 +43,5 @@ variable "prefix" {
 variable "github_repository" {
   type        = string
   description = "GitHubリポジトリ名（例: owner/repo）"
+  default     = "jjchange10/googlecloud"
 }
