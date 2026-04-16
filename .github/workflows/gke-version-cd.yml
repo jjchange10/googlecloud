@@ -207,7 +207,7 @@ jobs:
             if [ "$CURRENT_VERSION" == "$TARGET_VERSION" ]; then
               echo "✅ Node pool '$POOL_NAME' is already at target version $TARGET_VERSION. Skipping."
             else
-              echo "⚠️ Node pool '$POOL_NAME' is at $CURRENT_VERSION. Upgrading to $TARGET_VERSION..."
+              echo "⚠ Node pool '$POOL_NAME' is at $CURRENT_VERSION. Upgrading to $TARGET_VERSION..."
               gcloud container clusters upgrade $CLUSTER_NAME \
                         --node-pool="$POOL_NAME" \
                         --cluster-version=$TARGET_VERSION \

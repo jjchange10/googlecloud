@@ -1,5 +1,5 @@
 locals {
-    zones = slice(data.google_compute_zones.available.names, 0, 3)
+  zones = slice(data.google_compute_zones.available.names, 0, 3)
 }
 
 locals {
@@ -7,13 +7,21 @@ locals {
 }
 
 locals {
-  pod_secondary_range = [for r in local.secondary_ranges : r.range_name if r.range_name == "gke-pods-range"][0]
+  pod_secondary_range     = [for r in local.secondary_ranges : r.range_name if r.range_name == "gke-pods-range"][0]
   service_secondary_range = [for r in local.secondary_ranges : r.range_name if r.range_name == "gke-services-range"][0]
 }
 
 locals {
   common_tags = {
     "environment" = "dev"
-    "managedby" = "terraform"
+    "managedby"   = "terraform"
+  }
+}
+
+locals {
+  common_labels = {
+    environment = "dev"
+    managed-by  = "terraform"
+    project     = var.prefix
   }
 }

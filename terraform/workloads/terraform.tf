@@ -18,7 +18,9 @@ terraform {
 
 provider "google" {
   project = var.base_project_id
-  region = var.region
+  region  = var.region
+
+  default_labels = local.common_labels
 }
 
 provider "helm" {
