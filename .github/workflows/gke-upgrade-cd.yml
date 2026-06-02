@@ -107,7 +107,7 @@ jobs:
           echo "value=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upgrade Control Plane
-        uses: caddijp/gh-actions/infra/gke-control-plane-upgrade@bdf794a066b0f0d131db3c11faff70b32af80c86 # v0.82.0
+        uses: ./.github/actions/gke-control-plane-upgrade
         with:
           cluster_name: ${{ matrix.cluster_name }}
           location: ${{ matrix.location }}
@@ -224,7 +224,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Upgrade Node Pool
-        uses: caddijp/gh-actions/infra/gke-nodepool-upgrade@bdf794a066b0f0d131db3c11faff70b32af80c86 # v0.82.0
+        uses: ./.github/actions/gke-nodepool-upgrade
         with:
           cluster_name: ${{ matrix.cluster_name }}
           location: ${{ matrix.location }}
