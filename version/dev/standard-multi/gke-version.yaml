@@ -4,6 +4,7 @@
 # このファイルは、複数Node Poolの並列アップグレードテスト用クラスタです。
 # ===================================================================
 name: gke-version
+# re-trigger workflow for autopilot + standard matrix run
 cluster_name: test-tokyo-cluster-multi
 cluster_type: standard
 location: asia-northeast1
