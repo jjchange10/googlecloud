@@ -6,7 +6,7 @@ on:
       - main
       - develop
     paths:
-      - 'version/**/gke-version.yaml'
+      - 'version/*/*/*.yaml'
 
 permissions:
   contents: read
@@ -21,15 +21,16 @@ jobs:
       has_changes: ${{ steps.set_matrix.outputs.has_changes }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
 
       - name: Get Changed YAML Files
         id: changed_files
-        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5
+        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323  # v47.0.5
         with:
-          files: version/**/gke-version.yaml
+          files: |
+            version/*/*/*.yaml
           matrix: true
 
       - name: Set Matrix
@@ -37,17 +38,34 @@ jobs:
         env:
           ALL_CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
         run: |
-          set +e  # エラーでも続行
+          set +e
 
           if [ -z "$ALL_CHANGED_FILES" ] || [ "$ALL_CHANGED_FILES" == "[]" ]; then
             echo "No changes detected in version files"
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
           else
-            matrix=$(echo "$ALL_CHANGED_FILES" | jq -c '[.[] | split("/") | {env: .[1], cluster_name: .[2]}] | unique')
+            matrix="[]"
+            for file in $(echo "$ALL_CHANGED_FILES" | jq -r '.[]'); do
+              env=$(echo "$file" | cut -d'/' -f2)
+              cluster_name=$(yq eval '.cluster_name' "$file")
+              cluster_type=$(yq eval '.cluster_type' "$file")
+              location=$(yq eval '.location' "$file")
+              cp_version=$(yq eval '.control-plane.gke-version' "$file")
+              np_version=$(yq eval '.node-pool.gke-version' "$file")
+
+              matrix=$(echo "$matrix" | jq -c \
+                --arg env "$env" \
+                --arg cluster "$cluster_name" \
+                --arg type "$cluster_type" \
+                --arg loc "$location" \
+                --arg cpv "$cp_version" \
+                --arg npv "$np_version" \
+                '. + [{ env: $env, cluster_name: $cluster, cluster_type: $type, location: $loc, cp_version: $cpv, np_version: $npv }]')
+            done
             exit_code=$?
 
-            if [ $exit_code -eq 0 ] && [ -n "$matrix" ]; then
+            if [ $exit_code -eq 0 ] && [ "$matrix" != "[]" ]; then
               echo "has_changes=true" >> "$GITHUB_OUTPUT"
               echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
             else
@@ -68,43 +86,33 @@ jobs:
       fail-fast: false
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3
 
-      - name: Parse Version Config
-        id: parse-config
+      - name: Get Current Control Plane Version
+        id: current-version
         run: |
-          FILE_PATH="version/${{ matrix.env }}/${{ matrix.cluster_name }}/gke-version.yaml"
-          CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
-          LOCATION=$(yq eval '.location' "$FILE_PATH")
-          TARGET_VERSION=$(yq eval '.control-plane.gke-version' "$FILE_PATH")
-
-          # Get current control plane version
-          CURRENT_VERSION=$(gcloud container clusters describe "$CLUSTER_NAME" \
-            --location="$LOCATION" \
+          CURRENT_VERSION=$(gcloud container clusters describe "${{ matrix.cluster_name }}" \
+            --location="${{ matrix.location }}" \
             --project=test-kose-460406 \
             --format="value(currentMasterVersion)")
-
-          echo "cluster_name=$CLUSTER_NAME" >> "$GITHUB_OUTPUT"
-          echo "location=$LOCATION" >> "$GITHUB_OUTPUT"
-          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "target_version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "value=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upgrade Control Plane
-        uses: ./.github/actions/gke-control-plane-upgrade
+        uses: caddijp/gh-actions/infra/gke-control-plane-upgrade@bdf794a066b0f0d131db3c11faff70b32af80c86 # v0.82.0
         with:
-          cluster_name: ${{ steps.parse-config.outputs.cluster_name }}
-          location: ${{ steps.parse-config.outputs.location }}
-          current_version: ${{ steps.parse-config.outputs.current_version }}
-          target_version: ${{ steps.parse-config.outputs.target_version }}
+          cluster_name: ${{ matrix.cluster_name }}
+          location: ${{ matrix.location }}
+          current_version: ${{ steps.current-version.outputs.value }}
+          target_version: ${{ matrix.cp_version }}
           gcp_project_id: test-kose-460406
           gcp_workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           gcp_service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
@@ -119,38 +127,32 @@ jobs:
       fail-fast: false
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3
 
       - name: Build Node Pool Matrix
         id: build-matrix
         run: |
-          FILE_PATH="version/${{ matrix.env }}/${{ matrix.cluster_name }}/gke-version.yaml"
-          CLUSTER_NAME=$(yq eval '.cluster_name' "$FILE_PATH")
-          CLUSTER_TYPE=$(yq eval '.cluster_type' "$FILE_PATH")
-          LOCATION=$(yq eval '.location' "$FILE_PATH")
-          TARGET_VERSION=$(yq eval '.node-pool.gke-version' "$FILE_PATH")
-
-          if [[ "${CLUSTER_TYPE}" == "standard" ]]; then
+          if [[ "${{ matrix.cluster_type }}" == "standard" ]]; then
             NODE_POOLS=$(gcloud container node-pools list \
-              --cluster="${CLUSTER_NAME}" \
-              --location="${LOCATION}" \
+              --cluster="${{ matrix.cluster_name }}" \
+              --location="${{ matrix.location }}" \
               --format="json(name,version)" \
               --project="test-kose-460406")
 
             MATRIX_JSON=$(echo "$NODE_POOLS" | jq -c \
               --arg env "${{ matrix.env }}" \
-              --arg cluster "$CLUSTER_NAME" \
-              --arg location "$LOCATION" \
-              --arg target "$TARGET_VERSION" \
+              --arg cluster "${{ matrix.cluster_name }}" \
+              --arg location "${{ matrix.location }}" \
+              --arg target "${{ matrix.np_version }}" \
               '[.[] | {
                 env: $env,
                 cluster_name: $cluster,
@@ -171,7 +173,7 @@ jobs:
           echo '${{ steps.build-matrix.outputs.matrix }}' > matrices/matrix.json
 
       - name: Upload Matrix Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: nodepool-matrix-${{ matrix.env }}-${{ matrix.cluster_name }}
           path: matrices/
@@ -187,7 +189,7 @@ jobs:
       has_nodepools: ${{ steps.combine.outputs.has_nodepools }}
     steps:
       - name: Download All Matrices
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: nodepool-matrix-*
           path: all-matrices
@@ -216,13 +218,13 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.aggregate-nodepool-matrix.outputs.matrix) }}
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Upgrade Node Pool
-        uses: ./.github/actions/gke-nodepool-upgrade
+        uses: caddijp/gh-actions/infra/gke-nodepool-upgrade@bdf794a066b0f0d131db3c11faff70b32af80c86 # v0.82.0
         with:
           cluster_name: ${{ matrix.cluster_name }}
           location: ${{ matrix.location }}
